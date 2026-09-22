@@ -15,14 +15,7 @@ export default function PrintQC() {
   const [colours, setColours] = useState([]);
 
   useEffect(() => {
-    (async () => {
-      const plans = await api.get("/plans");
-      for (const p of plans) {
-        const full = await api.get(`/plans/${p.id}`);
-        const q = full.qc_records.find((x) => x.id === qcId);
-        if (q) { setQc(q); setPlan(full); break; }
-      }
-    })();
+    api.get(`/qc-records/${qcId}`).then((data) => { setQc(data.qc); setPlan(data.plan); });
     api.get("/articles").then(setArticles);
     api.get("/colours").then(setColours);
   }, [qcId]);
@@ -33,13 +26,13 @@ export default function PrintQC() {
 
   return (
     <div>
-      <div className="no-print p-4 bg-slate-100 flex justify-end"><Button onClick={() => window.print()}><Printer size={14} className="mr-1" />Print</Button></div>
-      <div className="print-page print-a4">
+      <div className="no-print p-4 bg-slate-100 flex justify-end"><Button onClick={() => window.print()} data-testid="print-trigger-button"><Printer size={14} className="mr-1" />Print</Button></div>
+      <div className="print-page" data-testid="print-slip-container">
         <PrintHeader title="QC Inspection Slip" subtitle="Completed Record" />
         <div className="doc-meta">
-          <div><span className="lbl">QC No.</span><span className="val">{qc.qc_no}</span></div>
-          <div><span className="lbl">Plan No.</span><span className="val">{plan.plan_no}</span></div>
-          <div><span className="lbl">Date</span><span className="val">{new Date(qc.inspection_date).toLocaleString()}</span></div>
+          <div><span className="lbl">QC No.</span><span className="val" data-testid="print-qc-number">{qc.qc_no}</span></div>
+          <div><span className="lbl">Plan No.</span><span className="val" data-testid="print-plan-number">{plan.plan_no}</span></div>
+          <div><span className="lbl">Date</span><span className="val" data-testid="print-qc-date">{new Date(qc.inspection_date).toLocaleDateString()}</span></div>
           <div><span className="lbl">Fabricator</span><span className="val">{plan.fabricator_name || "-"}</span></div>
           <div><span className="lbl">Article</span><span className="val">{article?.code} — {article?.name}</span></div>
           <div><span className="lbl">Colour</span><span className="val">{colour?.name}</span></div>

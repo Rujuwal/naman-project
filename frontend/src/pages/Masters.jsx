@@ -46,50 +46,64 @@ function PlanConfigMaster() {
   const [items, setItems] = useState([]);
   const [articles, setArticles] = useState([]);
   const [open, setOpen] = useState(false);
-  const [form, setForm] = useState({ article_id: "", name: "", sizes: [{ size: "", pairs: 0 }] });
-
+  const [editing, setEditing] = useState(null);
+  const empty = { article_id: "", name: "", pairs_per_bag: "", sizes: [{ size: "", pairs: 0, pairs_per_bag: "" }] };
+  const [form, setForm] = useState(empty);
   const load = () => { api.get("/plan-configs").then(setItems); api.get("/articles").then(setArticles); };
   useEffect(() => { load(); }, []);
-
+  const openNew = () => { setEditing(null); setForm(empty); setOpen(true); };
+  const openEdit = (pc) => { setEditing(pc.id); setForm({ ...pc, pairs_per_bag: pc.pairs_per_bag ?? "" }); setOpen(true); };
+  const updSize = (i, k, v) => setForm((prev) => ({ ...prev, sizes: prev.sizes.map((s, n) => n === i ? { ...s, [k]: v } : s) }));
   const save = async () => {
-    if (!form.article_id || !form.name) return toast.error("Fill required fields");
-    try { await api.post("/plan-configs", { ...form, sizes: form.sizes.filter((s) => s.size && s.pairs > 0).map((s) => ({ ...s, pairs: parseInt(s.pairs) })), active: true }); toast.success("Saved"); setOpen(false); setForm({ article_id: "", name: "", sizes: [{ size: "", pairs: 0 }] }); load(); }
-    catch (e) { toast.error(e.response?.data?.detail || "Failed"); }
+    if (!form.article_id || !form.name || !form.sizes.length) return toast.error("Fill required fields");
+    const positiveInt = (v) => Number.isInteger(Number(v)) && Number(v) > 0;
+    if (form.sizes.some((s) => !s.size || !positiveInt(s.pairs) || !positiveInt(s.pairs_per_bag || form.pairs_per_bag))) return toast.error("Each size needs whole positive pairs and a Pairs Per Bag rule");
+    if (form.pairs_per_bag !== "" && !positiveInt(form.pairs_per_bag)) return toast.error("Pairs Per Bag must be a positive whole number");
+    if (new Set(form.sizes.map((s) => s.size)).size !== form.sizes.length) return toast.error("Sizes must be unique");
+    const payload = { ...form, pairs_per_bag: form.pairs_per_bag === "" ? null : Number(form.pairs_per_bag), sizes: form.sizes.map((s) => ({ ...s, pairs: Number(s.pairs), pairs_per_bag: s.pairs_per_bag ? Number(s.pairs_per_bag) : null })) };
+    try {
+      if (editing) await api.put(`/plan-configs/${editing}`, payload);
+      else await api.post("/plan-configs", payload);
+      toast.success("Configuration saved"); setOpen(false); load();
+    } catch (e) { toast.error(typeof e.response?.data?.detail === "string" ? e.response.data.detail : "Check configuration values"); }
   };
-
-  const addSize = () => setForm({ ...form, sizes: [...form.sizes, { size: "", pairs: 0 }] });
-  const updSize = (i, k, v) => { const ss = [...form.sizes]; ss[i] = { ...ss[i], [k]: v }; setForm({ ...form, sizes: ss }); };
-  const rmSize = (i) => setForm({ ...form, sizes: form.sizes.filter((_, idx) => idx !== i) });
-
-  const aName = (id) => articles.find((a) => a.id === id)?.code || "-";
-
   return (
     <Card className="p-4">
       <div className="flex items-center justify-between mb-3">
         <div className="font-display font-semibold">Plan Configurations</div>
-        <Dialog open={open} onOpenChange={setOpen}>
-          <DialogTrigger asChild><Button size="sm" data-testid="add-pc"><Plus size={14} className="mr-1" />Add</Button></DialogTrigger>
-          <DialogContent className="max-w-2xl"><DialogHeader><DialogTitle>New Plan Configuration</DialogTitle></DialogHeader>
-            <div className="space-y-3 py-2">
-              <div><Label>Article</Label><Select value={form.article_id} onValueChange={(v) => setForm({ ...form, article_id: v })}><SelectTrigger data-testid="pc-article"><SelectValue placeholder="Select" /></SelectTrigger><SelectContent>{articles.map((a) => <SelectItem key={a.id} value={a.id}>{a.code} - {a.name}</SelectItem>)}</SelectContent></Select></div>
-              <div><Label>Configuration Name</Label><Input value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} placeholder="e.g. Kids 2-5" data-testid="pc-name" /></div>
-              <div>
-                <div className="flex items-center justify-between mb-1"><Label>Sizes</Label><Button size="sm" variant="outline" onClick={addSize} data-testid="add-size">+ Add Size</Button></div>
-                <table className="w-full">
-                  <thead><tr className="text-xs text-slate-500"><th className="text-left">Size</th><th className="text-left">Pairs/Plan</th><th></th></tr></thead>
-                  <tbody>{form.sizes.map((s, i) => <tr key={i}><td className="pr-2"><Input value={s.size} onChange={(e) => updSize(i, "size", e.target.value)} data-testid={`size-${i}-name`} /></td><td className="pr-2"><Input type="number" value={s.pairs} onChange={(e) => updSize(i, "pairs", e.target.value)} data-testid={`size-${i}-pairs`} /></td><td><Button variant="ghost" size="sm" onClick={() => rmSize(i)}><Trash2 size={14} /></Button></td></tr>)}</tbody>
-                </table>
-                <div className="text-sm mt-2 font-mono">Total: {form.sizes.reduce((a, s) => a + (parseInt(s.pairs) || 0), 0)}</div>
-              </div>
-            </div>
-            <DialogFooter><Button onClick={save} data-testid="save-pc">Save</Button></DialogFooter>
-          </DialogContent>
-        </Dialog>
+        <Button size="sm" onClick={openNew} data-testid="add-pc"><Plus size={14} className="mr-1" />Add</Button>
       </div>
-      <table className="data-table w-full">
-        <thead><tr><th>Article</th><th>Name</th><th>Sizes</th><th>Total Pairs</th></tr></thead>
-        <tbody>{items.map((it) => <tr key={it.id}><td>{aName(it.article_id)}</td><td>{it.name}</td><td className="text-xs font-mono">{it.sizes.map((s) => `${s.size}:${s.pairs}`).join(" · ")}</td><td className="font-mono font-semibold">{it.total_pairs}</td></tr>)}</tbody>
+      <table className="data-table w-full" data-testid="plan-config-table">
+        <thead><tr><th>Article</th><th>Name</th><th>Sizes</th><th>Total Pairs</th><th>Pairs Per Bag</th><th></th></tr></thead>
+        <tbody>{items.map((it) => <tr key={it.id} data-testid={`config-${it.id}`}>
+          <td>{articles.find((a) => a.id === it.article_id)?.code || "-"}</td><td>{it.name}</td>
+          <td className="text-xs font-mono">{it.sizes.map((s) => `${s.size}:${s.pairs}`).join(" · ")}</td><td className="font-mono font-semibold">{it.total_pairs}</td>
+          <td data-testid={`config-packing-${it.id}`} className="text-xs">{it.sizes.some((s) => s.pairs_per_bag) ? it.sizes.map((s) => `${s.size}: ${s.pairs_per_bag || it.pairs_per_bag || "Not set"}`).join(" · ") : it.pairs_per_bag || "Not configured"}</td>
+          <td><Button size="sm" variant="outline" data-testid={`edit-pc-${it.id}`} onClick={() => openEdit(it)}>Edit</Button></td>
+        </tr>)}</tbody>
       </table>
+      <Dialog open={open} onOpenChange={setOpen}>
+        <DialogContent className="max-w-2xl" aria-describedby={undefined} data-testid="plan-config-dialog">
+          <DialogHeader><DialogTitle>{editing ? "Edit" : "New"} Plan Configuration</DialogTitle></DialogHeader>
+          <div className="space-y-3 py-2 max-h-[70vh] overflow-auto">
+            <div><Label>Article</Label><Select value={form.article_id} onValueChange={(v) => setForm((prev) => ({ ...prev, article_id: v }))}><SelectTrigger data-testid="pc-article"><SelectValue placeholder="Select" /></SelectTrigger><SelectContent>{articles.map((a) => <SelectItem key={a.id} value={a.id} data-testid={`pc-article-${a.id}`}>{a.code} - {a.name}</SelectItem>)}</SelectContent></Select></div>
+            <div><Label>Configuration Name</Label><Input value={form.name} onChange={(e) => setForm((prev) => ({ ...prev, name: e.target.value }))} placeholder="e.g. Kids 2-5" data-testid="pc-name" /></div>
+            <div><Label>Pairs Per Bag</Label><Input type="number" min="1" step="1" value={form.pairs_per_bag} onChange={(e) => setForm((prev) => ({ ...prev, pairs_per_bag: e.target.value }))} placeholder="Pairs of one size per physical bag" data-testid="pc-pairs-per-bag" /></div>
+            <p className="text-xs text-slate-500" data-testid="packing-rule-help">Applies to all sizes unless overridden below. Sizes never mix in a physical bag. A partly filled bag counts as one bag. Recorded returns retain their packing rule.</p>
+            <div className="flex items-center justify-between"><Label>Sizes</Label><Button size="sm" variant="outline" onClick={() => setForm((prev) => ({ ...prev, sizes: [...prev.sizes, { size: "", pairs: 0, pairs_per_bag: "" }] }))} data-testid="add-size">+ Add Size</Button></div>
+            <table className="w-full"><thead><tr className="text-xs text-slate-500"><th>Size</th><th>Pairs / Plan</th><th>Pairs / Bag Override</th><th></th></tr></thead>
+              <tbody>{form.sizes.map((s, i) => <tr key={i}>
+                <td className="pr-2"><Input value={s.size} onChange={(e) => updSize(i, "size", e.target.value)} data-testid={`size-${i}-name`} /></td>
+                <td className="pr-2"><Input type="number" min="1" value={s.pairs} onChange={(e) => updSize(i, "pairs", e.target.value)} data-testid={`size-${i}-pairs`} /></td>
+                <td><Input type="number" min="1" value={s.pairs_per_bag ?? ""} placeholder="Use config" onChange={(e) => updSize(i, "pairs_per_bag", e.target.value)} data-testid={`size-${i}-pairs-per-bag`} /></td>
+                <td><Button variant="ghost" size="sm" data-testid={`remove-size-${i}`} onClick={() => setForm((prev) => ({ ...prev, sizes: prev.sizes.filter((_, n) => n !== i) }))}><Trash2 size={14} /></Button></td>
+              </tr>)}</tbody>
+            </table>
+            <div className="text-sm font-mono" data-testid="pc-total-pairs">Total: {form.sizes.reduce((a, s) => a + (Number(s.pairs) || 0), 0)}</div>
+          </div>
+          <DialogFooter><Button onClick={save} data-testid="save-pc">Save</Button></DialogFooter>
+        </DialogContent>
+      </Dialog>
     </Card>
   );
 }
@@ -232,7 +246,7 @@ export default function Masters() {
           <TabsTrigger value="materials">Materials</TabsTrigger>
           <TabsTrigger value="fabricators">Fabricators</TabsTrigger>
           <TabsTrigger value="workers">Workers</TabsTrigger>
-          <TabsTrigger value="plan-configs">Plan Configs</TabsTrigger>
+          <TabsTrigger value="plan-configs" data-testid="masters-plan-configs">Plan Configs</TabsTrigger>
           <TabsTrigger value="boms">BOM</TabsTrigger>
         </TabsList>
         <TabsContent value="customers"><SimpleMaster title="Customers" path="/customers" testid="cust" columns={[{ key: "name", label: "Name" }, { key: "phone", label: "Phone" }, { key: "address", label: "Address" }]} fields={[{ name: "name", label: "Name" }, { name: "phone", label: "Phone" }, { name: "address", label: "Address" }]} /></TabsContent>

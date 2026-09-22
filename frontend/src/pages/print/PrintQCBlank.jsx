@@ -30,13 +30,13 @@ export default function PrintQCBlank() {
 
   return (
     <div>
-      <div className="no-print p-4 bg-slate-100 flex justify-end"><Button onClick={() => window.print()}><Printer size={14} className="mr-1" />Print</Button></div>
-      <div className="print-page print-a4">
+      <div className="no-print p-4 bg-slate-100 flex justify-end"><Button onClick={() => window.print()} data-testid="print-trigger-button"><Printer size={14} className="mr-1" />Print</Button></div>
+      <div className="print-page" data-testid="print-slip-container">
         <PrintHeader title="QC Inspection Slip" subtitle="Blank — fill on inspection" />
         <div className="doc-meta">
-          <div><span className="lbl">QC No.</span><span className="val"><span className="blank-line" /></span></div>
-          <div><span className="lbl">Plan No.</span><span className="val">{plan.plan_no}</span></div>
-          <div><span className="lbl">Date</span><span className="val"><span className="blank-line" /></span></div>
+          <div><span className="lbl">QC No.</span><span className="val" data-testid="print-qc-number">{plan.qc_no || "Not yet assigned"}</span></div>
+          <div><span className="lbl">Plan No.</span><span className="val" data-testid="print-plan-number">{plan.plan_no}</span></div>
+          <div><span className="lbl">Date</span><span className="val" data-testid="print-qc-date">{plan.qc_date ? new Date(plan.qc_date).toLocaleDateString() : "-"}</span></div>
           <div><span className="lbl">Fabricator</span><span className="val">{plan.fabricator_name || "-"}</span></div>
           <div><span className="lbl">Article</span><span className="val">{article?.code} — {article?.name}</span></div>
           <div><span className="lbl">Colour</span><span className="val">{colour?.name}</span></div>
@@ -60,7 +60,7 @@ export default function PrintQCBlank() {
           {DEFECTS.map((d) => <div className="chk" key={d}><span className="check-box" /><span>{d}</span></div>)}
         </div>
 
-        <div style={{fontSize: 11, marginTop: 8}}><strong>Remarks:</strong> <span className="blank-line" style={{minWidth: 320}} /></div>
+        <div style={{fontSize: 11, marginTop: 8}}><strong>Remarks:</strong> <span className="blank-line" style={{width: '70%'}} /></div>
 
         <div className="sign-block">
           <div>QC Worker: <span className="blank-line" /><div className="sign-line">QC Signature</div></div>

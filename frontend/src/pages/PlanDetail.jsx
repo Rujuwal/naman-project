@@ -30,6 +30,22 @@ export default function PlanDetail() {
   const [bags, setBags] = useState([]);
   const [sizeResults, setSizeResults] = useState([]);
   const [retRemarks, setRetRemarks] = useState("");
+  const [packing, setPacking] = useState(null);
+  const [packingError, setPackingError] = useState("");
+
+  useEffect(() => {
+    if (!retOpen) return;
+    let active = true;
+    setPacking(null); setPackingError("");
+    const timer = setTimeout(() => {
+      api.post(`/plans/${id}/packing-preview`, { bags }).then((data) => {
+        if (active) { setPacking(data); setPackingError(data.packing_error || ""); }
+      }).catch((e) => {
+        if (active) setPackingError(typeof e.response?.data?.detail === "string" ? e.response.data.detail : "Enter non-negative whole pairs");
+      });
+    }, 200);
+    return () => { active = false; clearTimeout(timer); };
+  }, [bags, id, retOpen]);
 
   // qc
   const [qcOpen, setQcOpen] = useState(false);
@@ -67,12 +83,12 @@ export default function PlanDetail() {
         toast.success("Cutting started");
         load();
       }
-    } catch (e) { toast.error(e.response?.data?.detail || "Failed"); }
+    } catch (e) { toast.error(typeof e.response?.data?.detail === "string" ? e.response.data.detail : "Check entered values and try again"); }
   };
 
   const issuePrinting = async () => {
     try { await api.post(`/plans/${id}/issue-to-printing`); toast.success("Issued to Printing"); load(); }
-    catch (e) { toast.error(e.response?.data?.detail || "Failed"); }
+    catch (e) { toast.error(typeof e.response?.data?.detail === "string" ? e.response.data.detail : "Check entered values and try again"); }
   };
 
   const issueFabricator = async () => {
@@ -82,42 +98,39 @@ export default function PlanDetail() {
       toast.success("Issued to Fabricator");
       setFabOpen(false);
       load();
-    } catch (e) { toast.error(e.response?.data?.detail || "Failed"); }
+    } catch (e) { toast.error(typeof e.response?.data?.detail === "string" ? e.response.data.detail : "Check entered values and try again"); }
   };
 
-  const addBag = () => setBags([...bags, { bag_no: `B${bags.length + 1}`, sizes: plan.sizes_snapshot.map((s) => ({ size: s.size, qty: 0 })), remarks: "" }]);
-  const rmBag = (i) => setBags(bags.filter((_, idx) => idx !== i));
-  const updBag = (i, k, v) => { const bb = [...bags]; bb[i] = { ...bb[i], [k]: v }; setBags(bb); };
-  const updBagSize = (i, size, v) => {
-    const bb = [...bags];
-    bb[i] = { ...bb[i], sizes: bb[i].sizes.map((s) => s.size === size ? { ...s, qty: parseInt(v) || 0 } : s) };
-    setBags(bb);
-  };
+  const addBag = () => setBags((prev) => [...prev, { bag_no: String(prev.length + 1), sizes: plan.sizes_snapshot.map((s) => ({ size: s.size, qty: 0 })), remarks: "" }]);
+  const rmBag = (i) => setBags((prev) => prev.filter((_, idx) => idx !== i).map((b, n) => ({ ...b, bag_no: String(n + 1) })));
+  const updBag = (i, k, v) => setBags((prev) => prev.map((b, idx) => idx === i ? { ...b, [k]: v } : b));
+  const updBagSize = (i, size, v) => setBags((prev) => prev.map((b, idx) => idx === i ? { ...b, sizes: b.sizes.map((s) => s.size === size ? { ...s, qty: Number(v) } : s) } : b));
 
-  const updSR = (size, k, v) => setSizeResults(sizeResults.map((s) => s.size === size ? { ...s, [k]: parseInt(v) || 0 } : s));
+  const updSR = (size, k, v) => setSizeResults((prev) => prev.map((s) => s.size === size ? { ...s, [k]: Number(v) } : s));
 
   const submitReturn = async () => {
-    if (bags.length === 0) return toast.error("Add at least one bag");
+    if (bags.length === 0) return toast.error("Add at least one packing row");
+    if (!packing || packingError) return toast.error(packingError || "Wait for packing totals");
     try {
       await api.post(`/plans/${id}/receive-stitching`, { bags, size_results: sizeResults, remarks: retRemarks });
       toast.success("Return recorded");
       setRetOpen(false); setBags([]); load();
-    } catch (e) { toast.error(e.response?.data?.detail || "Failed"); }
+    } catch (e) { toast.error(typeof e.response?.data?.detail === "string" ? e.response.data.detail : "Check entered values and try again"); }
   };
 
-  const updQC = (size, k, v) => setQc({ ...qc, size_results: qc.size_results.map((s) => s.size === size ? { ...s, [k]: parseInt(v) || 0 } : s) });
+  const updQC = (size, k, v) => setQc((prev) => ({ ...prev, size_results: prev.size_results.map((s) => s.size === size ? { ...s, [k]: Number(v) } : s) }));
 
   const submitQC = async () => {
     try {
       await api.post(`/plans/${id}/qc`, qc);
       toast.success("QC saved");
       setQcOpen(false); load();
-    } catch (e) { toast.error(e.response?.data?.detail || "Failed"); }
+    } catch (e) { toast.error(typeof e.response?.data?.detail === "string" ? e.response.data.detail : "Check entered values and try again"); }
   };
 
   const reworkReturn = async () => {
     try { await api.post(`/plans/${id}/rework-return`, { remarks: "" }); toast.success("Sent back to QC"); load(); }
-    catch (e) { toast.error(e.response?.data?.detail || "Failed"); }
+    catch (e) { toast.error(typeof e.response?.data?.detail === "string" ? e.response.data.detail : "Check entered values and try again"); }
   };
 
   const cancelPlan = async () => {
@@ -127,7 +140,7 @@ export default function PlanDetail() {
       toast.success("Plan cancelled");
       setCancelOpen(false); setCancelReason("");
       load();
-    } catch (e) { toast.error(e.response?.data?.detail || "Failed"); }
+    } catch (e) { toast.error(typeof e.response?.data?.detail === "string" ? e.response.data.detail : "Check entered values and try again"); }
   };
 
   const actionButton = () => {
@@ -144,7 +157,7 @@ export default function PlanDetail() {
           <a href={`/print/printing/${plan.id}`} target="_blank" rel="noreferrer"><Button variant="outline"><Printer size={14} className="mr-1" />Printing Slip</Button></a>
           <Dialog open={fabOpen} onOpenChange={setFabOpen}>
             <DialogTrigger asChild><Button data-testid="btn-issue-fabricator">Issue to Fabricator</Button></DialogTrigger>
-            <DialogContent>
+            <DialogContent aria-describedby={undefined}>
               <DialogHeader><DialogTitle>Issue to Fabricator</DialogTitle></DialogHeader>
               <div className="space-y-3 py-2">
                 <div><Label>Fabricator *</Label>
@@ -165,39 +178,43 @@ export default function PlanDetail() {
           <a href={`/print/stitching/${plan.id}`} target="_blank" rel="noreferrer"><Button variant="outline"><Printer size={14} className="mr-1" />Stitching Card</Button></a>
           <Dialog open={retOpen} onOpenChange={setRetOpen}>
             <DialogTrigger asChild><Button data-testid="btn-receive-stitching">Receive Stitching</Button></DialogTrigger>
-            <DialogContent className="max-w-4xl">
+            <DialogContent aria-describedby={undefined} className="max-w-4xl">
               <DialogHeader><DialogTitle>Stitching Return - {plan.plan_no}</DialogTitle></DialogHeader>
               <div className="space-y-4 py-2 max-h-[70vh] overflow-auto">
                 <div>
                   <div className="flex items-center justify-between mb-2">
-                    <div className="font-semibold">Bags</div>
-                    <Button size="sm" variant="outline" onClick={addBag} data-testid="add-bag"><Plus size={14} className="mr-1" />Add Bag</Button>
+                    <div className="font-semibold">Packing Matrix</div>
+                    <Button size="sm" variant="outline" onClick={addBag} data-testid="add-packing-row"><Plus size={14} className="mr-1" />Add Packing Row</Button>
                   </div>
-                  <table className="data-table w-full">
-                    <thead><tr><th>Bag No.</th>{plan.sizes_snapshot.map((s) => <th key={s.size}>Size {s.size}</th>)}<th>Total</th><th>Remarks</th><th></th></tr></thead>
+                  <p className="text-xs text-slate-500 mb-2" data-testid="return-packing-help">S. No. identifies a packing row, not a physical bag. Bag totals use each size's Pairs Per Bag rule.</p>
+                  <table className="data-table w-full" data-testid="return-packing-table">
+                    <thead><tr><th>S. No.</th>{plan.sizes_snapshot.map((s) => <th key={s.size}>Size {s.size}</th>)}<th>Total</th><th>Remarks</th><th></th></tr></thead>
                     <tbody>
-                      {bags.map((b, i) => {
-                        const total = b.sizes.reduce((a, x) => a + (x.qty || 0), 0);
-                        return (
-                          <tr key={i}>
-                            <td><Input value={b.bag_no} onChange={(e) => updBag(i, "bag_no", e.target.value)} className="w-20" /></td>
-                            {b.sizes.map((s) => (
-                              <td key={s.size}><Input type="number" min="0" value={s.qty} onChange={(e) => updBagSize(i, s.size, e.target.value)} className="w-16" data-testid={`bag-${i}-size-${s.size}`} /></td>
-                            ))}
-                            <td className="font-mono font-semibold">{total}</td>
-                            <td><Input value={b.remarks} onChange={(e) => updBag(i, "remarks", e.target.value)} className="w-32" /></td>
-                            <td><Button variant="ghost" size="sm" onClick={() => rmBag(i)}><Trash2 size={14} /></Button></td>
-                          </tr>
-                        );
-                      })}
+                      {bags.map((b, i) => (
+                        <tr key={i} data-testid={`return-packing-row-${i + 1}`}>
+                          <td className="font-mono" data-testid={`packing-serial-${i + 1}`}>{i + 1}</td>
+                          {b.sizes.map((s) => (
+                            <td key={s.size}><Input type="number" min="0" step="1" value={s.qty} onChange={(e) => updBagSize(i, s.size, e.target.value)} className="w-16" data-testid={`packing-${i}-size-${s.size}`} /></td>
+                          ))}
+                          <td className="font-mono font-semibold" data-testid={`packing-row-total-${i}`}>{packing?.row_totals[i] ?? "—"}</td>
+                          <td><Input value={b.remarks} onChange={(e) => updBag(i, "remarks", e.target.value)} className="w-32" data-testid={`packing-row-remarks-${i}`} /></td>
+                          <td><Button variant="ghost" size="sm" onClick={() => rmBag(i)} data-testid={`remove-packing-row-${i}`}><Trash2 size={14} /></Button></td>
+                        </tr>
+                      ))}
                       <tr className="bg-slate-50 font-semibold">
-                        <td>TOTAL BAGS: {bags.length}</td>
-                        {plan.sizes_snapshot.map((s) => <td key={s.size} className="font-mono">{bags.reduce((a, b) => a + (b.sizes.find((x) => x.size === s.size)?.qty || 0), 0)}</td>)}
-                        <td className="font-mono">{bags.reduce((a, b) => a + b.sizes.reduce((x, y) => x + (y.qty || 0), 0), 0)}</td>
+                        <td>TOTAL</td>
+                        {plan.sizes_snapshot.map((s) => <td key={s.size} className="font-mono" data-testid={`packing-size-total-${s.size}`}>{packing?.size_totals[s.size] ?? "—"}</td>)}
+                        <td className="font-mono">{packing?.total_pairs ?? "—"}</td>
                         <td colSpan="2"></td>
                       </tr>
                     </tbody>
                   </table>
+                  <div className="flex flex-wrap gap-6 mt-3 font-semibold">
+                    <div data-testid="return-total-bags">TOTAL BAGS: {packing?.total_bags ?? "—"}</div>
+                    <div data-testid="return-total-pairs">TOTAL PAIRS: {packing?.total_pairs ?? "—"}</div>
+                  </div>
+                  {packingError && <div role="alert" className="text-red-700 text-sm mt-2" data-testid="return-packing-error">{packingError}</div>}
+                  {packing && !packingError && <div className="text-xs text-slate-500 mt-2" data-testid="return-packing-breakdown">{Object.entries(packing.size_totals).map(([size, qty]) => `Size ${size}: ${qty} ÷ ${packing.packing_rule_snapshot[size]} = ${packing.bags_by_size[size]} bags`).join(" · ")}{Object.keys(packing.partial_pairs_by_size).length > 0 && " (includes partly filled bags, counted separately by size)"}</div>}
                 </div>
 
                 <div>
@@ -222,7 +239,7 @@ export default function PlanDetail() {
                 </div>
                 <Textarea placeholder="Remarks" value={retRemarks} onChange={(e) => setRetRemarks(e.target.value)} />
               </div>
-              <DialogFooter><Button onClick={submitReturn} data-testid="confirm-return">Save Return</Button></DialogFooter>
+              <DialogFooter><Button onClick={submitReturn} disabled={!packing || !!packingError || !bags.length} data-testid="confirm-return">Save Return</Button></DialogFooter>
             </DialogContent>
           </Dialog>
         </>;
@@ -231,9 +248,10 @@ export default function PlanDetail() {
           <a href={`/print/qc-blank/${plan.id}`} target="_blank" rel="noreferrer"><Button variant="outline" data-testid="btn-print-qc-blank"><Printer size={14} className="mr-1" />QC Slip (blank)</Button></a>
           <Dialog open={qcOpen} onOpenChange={setQcOpen}>
           <DialogTrigger asChild><Button data-testid="btn-qc">Perform QC</Button></DialogTrigger>
-          <DialogContent className="max-w-3xl">
+          <DialogContent aria-describedby={undefined} className="max-w-3xl">
             <DialogHeader><DialogTitle>QC - {plan.plan_no}</DialogTitle></DialogHeader>
             <div className="py-2 max-h-[70vh] overflow-auto space-y-3">
+              <div className="flex gap-6 text-sm"><span data-testid="qc-form-number">QC No.: {plan.qc_no}</span><span data-testid="qc-form-date">Date: {plan.qc_date ? new Date(plan.qc_date).toLocaleDateString() : "-"}</span></div>
               <table className="data-table w-full">
                 <thead><tr><th>Size</th><th>Returned</th><th>Pass</th><th>Rework</th><th>Hold</th></tr></thead>
                 <tbody>
@@ -288,7 +306,7 @@ export default function PlanDetail() {
         } />
 
       <Dialog open={cancelOpen} onOpenChange={setCancelOpen}>
-        <DialogContent>
+        <DialogContent aria-describedby={undefined}>
           <DialogHeader><DialogTitle>Cancel Plan {plan.plan_no}?</DialogTitle></DialogHeader>
           <div className="py-2 space-y-2">
             <div className="text-sm text-slate-600">Any consumed materials will be returned to stock. QC-passed pairs (if any) will be removed from finished stock. This action cannot be undone.</div>
@@ -309,6 +327,7 @@ export default function PlanDetail() {
             <div><div className="text-slate-500 text-xs uppercase">Priority</div><div>{plan.priority}</div></div>
             <div><div className="text-slate-500 text-xs uppercase">Fabricator</div><div>{plan.fabricator_name || "-"}</div></div>
             <div><div className="text-slate-500 text-xs uppercase">Dispatched</div><div className="font-mono">{plan.dispatched_qty || 0}</div></div>
+            <div><div className="text-slate-500 text-xs uppercase">Dispatch Date</div><div data-testid="plan-detail-dispatch-date">{plan.dispatch_date ? new Date(plan.dispatch_date).toLocaleDateString() : "-"}</div></div>
           </div>
           <div className="mt-4">
             <div className="text-xs uppercase text-slate-500 font-semibold mb-1">Size Breakup</div>
@@ -345,16 +364,18 @@ export default function PlanDetail() {
 
       {plan.returns?.length > 0 && (
         <Card className="p-4 mb-6">
-          <div className="font-display font-semibold mb-2">Stitching Returns</div>
+          <div className="flex justify-between items-center mb-2"><div className="font-display font-semibold">Stitching Returns</div><a href={`/print/stitching/${plan.id}`} target="_blank" rel="noreferrer" className="text-blue-600 text-sm" data-testid="print-stitching-return"><Printer size={14} className="inline mr-1" />Print Packing List</a></div>
           {plan.returns.map((r) => (
-            <div key={r.id} className="mb-3">
-              <div className="text-sm"><span className="font-mono">{r.return_no}</span> · {new Date(r.return_date).toLocaleString()} · {r.total_returned} pairs · {r.total_bags} bags</div>
-              <table className="data-table w-full mt-1">
-                <thead><tr><th>Bag</th>{plan.sizes_snapshot.map((s) => <th key={s.size}>{s.size}</th>)}<th>Total</th><th>Status</th></tr></thead>
+            <div key={r.id} className="mb-3" data-testid={`saved-return-${r.id}`}>
+              <div className="text-sm"><span className="font-mono">{r.return_no}</span> · {new Date(r.return_date).toLocaleDateString()}</div>
+              <table className="data-table w-full mt-1" data-testid={`saved-packing-table-${r.id}`}>
+                <thead><tr><th>S. No.</th>{plan.sizes_snapshot.map((s) => <th key={s.size}>{s.size}</th>)}<th>Total</th><th>Status</th></tr></thead>
                 <tbody>{r.bags.map((b, i) => (
-                  <tr key={i}><td>{b.bag_no}</td>{plan.sizes_snapshot.map((s) => <td key={s.size}>{b.sizes.find((x) => x.size === s.size)?.qty || 0}</td>)}<td>{b.total}</td><td>{b.dispatched ? "Dispatched" : "Available"}</td></tr>
-                ))}</tbody>
+                  <tr key={i}><td data-testid={`saved-serial-${r.id}-${i + 1}`}>{i + 1}</td>{plan.sizes_snapshot.map((s) => <td key={s.size}>{b.sizes.find((x) => x.size === s.size)?.qty || 0}</td>)}<td>{b.total}</td><td>{b.dispatched ? "Dispatched" : "Available"}</td></tr>
+                ))}<tr className="font-semibold"><td>TOTAL</td>{plan.sizes_snapshot.map((s) => <td key={s.size}>{r.size_totals[s.size]}</td>)}<td>{r.total_pairs}</td><td></td></tr></tbody>
               </table>
+              <div className="flex gap-6 mt-2 font-semibold"><span data-testid={`saved-return-bags-${r.id}`}>TOTAL BAGS: {r.total_bags ?? "Not configured"}</span><span data-testid={`saved-return-pairs-${r.id}`}>TOTAL PAIRS: {r.total_pairs}</span></div>
+              {r.packing_error && <div data-testid={`saved-packing-error-${r.id}`} className="text-amber-700 text-sm">{r.packing_error}</div>}
             </div>
           ))}
         </Card>

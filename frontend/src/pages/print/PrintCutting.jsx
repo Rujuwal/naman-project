@@ -28,8 +28,8 @@ export default function PrintCutting() {
 
   return (
     <div>
-      <div className="no-print p-4 bg-slate-100 flex justify-end gap-2"><Button onClick={() => window.print()}><Printer size={14} className="mr-1" />Print</Button></div>
-      <div className="print-page print-a4">
+      <div className="no-print p-4 bg-slate-100 flex justify-end gap-2"><Button onClick={() => window.print()} data-testid="print-trigger-button"><Printer size={14} className="mr-1" />Print</Button></div>
+      <div className="print-page" data-testid="print-slip-container">
         <PrintHeader title="Cutting Order" subtitle="Production Work Slip" />
         <div className="doc-meta">
           <div><span className="lbl">CO No.</span><span className="val">{plan.co_no}</span></div>

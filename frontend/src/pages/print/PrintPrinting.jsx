@@ -22,8 +22,8 @@ export default function PrintPrinting() {
 
   return (
     <div>
-      <div className="no-print p-4 bg-slate-100 flex justify-end"><Button onClick={() => window.print()}><Printer size={14} className="mr-1" />Print</Button></div>
-      <div className="print-page print-a4">
+      <div className="no-print p-4 bg-slate-100 flex justify-end"><Button onClick={() => window.print()} data-testid="print-trigger-button"><Printer size={14} className="mr-1" />Print</Button></div>
+      <div className="print-page" data-testid="print-slip-container">
         <PrintHeader title="Printing Order" subtitle="Production Work Slip" />
         <div className="doc-meta">
           <div><span className="lbl">Printing No.</span><span className="val">{plan.printing_no || "-"}</span></div>

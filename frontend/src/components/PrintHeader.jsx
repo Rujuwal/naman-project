@@ -2,7 +2,7 @@ import React from "react";
 
 export default function PrintHeader({ title, subtitle }) {
   return (
-    <div className="print-header">
+    <div className="print-header" data-testid="print-header">
       <div className="print-brand">
         <div className="print-brand-mark">N</div>
         <div>

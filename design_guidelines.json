@@ -1,0 +1,61 @@
+{
+  "project_name": "NAMAN UPPER Factory ERP - Print Layout Corrections",
+  "app_type": "manufacturing_erp_print_views",
+  "scope": "Concise layout guidance for vertical (portrait) paper dimensions (A5 portrait), print page rules, typography, and test identifiers for NAMAN UPPER factory print views. No full app redesign.",
+  "user_choices": {
+    "print_orientation": "vertical (portrait)",
+    "paper_size": "A5 portrait (148mm x 210mm)",
+    "plan_number_formatting": "Clear prefix layout like P/01 or P/26/01 displaying year clearly"
+  },
+  "print_layout_rules": {
+    "css_target_file": "/app/frontend/src/index.css",
+    "page_setup": "@media print { @page { size: A5 portrait; margin: 8mm; } body { background: white; -webkit-print-color-adjust: exact; print-color-adjust: exact; } .no-print { display: none !important; } .print-page { margin: 0 auto; padding: 6mm 8mm; width: 100%; max-width: 148mm; box-sizing: border-box; } }",
+    "screen_preview": ".print-page { background: white; max-width: 148mm; min-height: 210mm; margin: 16px auto; padding: 10mm; font-family: 'Inter', sans-serif; color: #0f172a; border: 1px solid #e2e8f0; box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05); }",
+    "slips_covered": [
+      "PrintCutting.jsx (Cutting Order)",
+      "PrintPrinting.jsx (Printing Order)",
+      "PrintStitching.jsx (Stitching Card)",
+      "PrintQCBlank.jsx (Blank QC Slip)",
+      "PrintQC.jsx (Completed QC Slip)",
+      "PrintDispatch.jsx (Dispatch Slip)"
+    ],
+    "table_formatting": "Keep table font size compact (10px-11px), padding 3px 5px, avoid overflow, ensure clear high-contrast solid borders (#94a3b8) for reliable thermal/dot-matrix or inkjet printing.",
+    "totals_and_matrices": "Preserve size-composition matrices across all slip views. Maintain backend calculated total bags, total pairs, and total bundles accurately inside vertical A5 print boundaries."
+  },
+  "specific_requirements": {
+    "plan_no_display": "Format plan numbers clearly with financial year / year code (e.g. P/26/01 or P/01) in doc-meta header.",
+    "qc_auto_fields": "Ensure QC Number and QC Date auto-populate on the QC list and QC print views.",
+    "production_tab_dispatch_date": "Display Dispatch Date on Production tab items and detail summaries.",
+    "dispatch_slip_matrix": "Keep size-composition matrix and backend total bags calculation perfectly aligned without horizontal overflow."
+  },
+  "typography": {
+    "font_family_body": "'Inter', sans-serif",
+    "font_family_headings": "'Outfit', sans-serif",
+    "font_family_mono": "'JetBrains Mono', monospace",
+    "print_title_size": "16px - 18px bold upper",
+    "doc_meta_size": "11px - 12px",
+    "table_font_size": "10px - 11px"
+  },
+  "colors": {
+    "print_text": "#0f172a",
+    "print_subtext": "#475569",
+    "print_border": "#94a3b8",
+    "print_header_bg": "#f1f5f9",
+    "print_totals_bg": "#0f172a",
+    "print_totals_text": "#ffffff"
+  },
+  "testing_and_attributes": {
+    "mandatory_data_testid": true,
+    "attribute_rules": "All print buttons, slip header sections, document meta values, and print tables MUST include clear kebab-case data-testid attributes.",
+    "example_test_ids": [
+      "data-testid=\"print-trigger-button\"",
+      "data-testid=\"print-slip-container\"",
+      "data-testid=\"print-header-plan-no\"",
+      "data-testid=\"print-qc-number\"",
+      "data-testid=\"print-qc-date\"",
+      "data-testid=\"print-dispatch-date\"",
+      "data-testid=\"size-composition-matrix-table\""
+    ]
+  },
+  "instructions_to_main_agent": "Ensure existing files under /app/frontend/src/pages/print/ and /app/frontend/src/index.css use A5 vertical portrait styling (@page { size: A5 portrait; margin: 8mm; }). Do not redesign business views or change core backend logic. Preserve existing size-composition matrix and totals."
+}

@@ -38,8 +38,8 @@ export default function Dispatch() {
               <tr key={d.id} data-testid={`dispatch-row-${d.dispatch_no}`}>
                 <td className="font-mono">{d.dispatch_no}</td>
                 <td className="text-sm">{new Date(d.dispatch_date).toLocaleDateString()}</td>
-                <td className="font-mono">{d.total_bags}</td>
-                <td className="font-mono font-semibold">{d.total_pairs}</td>
+                <td className="font-mono" data-testid={`dispatch-bags-${d.id}`}>{d.total_bags ?? <span className="text-amber-700 text-xs">Packing rule needed</span>}</td>
+                <td className="font-mono font-semibold" data-testid={`dispatch-pairs-${d.id}`}>{d.total_pairs}</td>
                 <td>{d.transporter || "-"}</td>
                 <td>{d.vehicle_lr || "-"}</td>
                 <td><StatusBadge status={d.status} /></td>
@@ -54,7 +54,7 @@ export default function Dispatch() {
       </Card>
 
       <Dialog open={!!cancelId} onOpenChange={(v) => !v && setCancelId(null)}>
-        <DialogContent>
+        <DialogContent aria-describedby={undefined}>
           <DialogHeader><DialogTitle>Cancel Dispatch</DialogTitle></DialogHeader>
           <div className="py-2">
             <div className="text-sm mb-2">This will restore finished stock, plan quantities and bags.</div>

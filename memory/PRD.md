@@ -54,6 +54,17 @@ customers, articles, colours, uoms, materials, fabricators, workers, plan_config
 - Second acceptance scenario Article X UI wiring (currently only backend-verified)
 - Search results page (global search wired to production filter)
 
+## Current Fix Batch — 2026-09-22 (Verification in Progress)
+- User explicitly corrects prior bag logic: packing rows are S. No. 1, 2, 3… and never physical bag counts. Six composition rows for 480 pairs at 20 pairs per size per bag must produce 24 physical bags.
+- Added backend `packing.py`: row/size reconciliation, total_pairs, total_bags, bags_by_size, size_order, partial-bag handling per size; no mixed-size bags or hardcoded runtime capacity.
+- Configurable Pairs Per Bag in Masters > Plan Configs, with per-size overrides and edit support. Article 04 / Men 6–10 initialized to the explicitly supplied 20. Other legacy configurations need actual packing rules entered; never infer capacities or display old row counts as bag counts.
+- Packing rule snapshot is frozen on Stitching Return and carried unchanged through QC/stock/dispatch. Existing confirmed-rule dispatch corrected to 24 bags without changing its six rows. Source `bag_no` remains an internal identity for old dispatch references only; UI and slips show S. No.
+- Added backend packing previews for Return and Dispatch; React displays authoritative totals. Invalid/duplicate/foreign packing selections and shortages validated before dispatch writes.
+- QC number/date allocated when the return enters QC, reused on blank slip and saved inspection; rework gets a new QC ticket. Production lists QC number/date and latest active dispatch date, excluding cancelled dispatches.
+- New plan numbers use P/YYYY/NN with existing year counter retained. Existing document numbers unchanged.
+- All six print views use A5 portrait with continued pages for long documents; stitching card shows original return packing when available.
+- Current external API reproduction verified: DSP-2026-0002 is now 6 rows / 480 pairs / 24 physical bags. Full regression tests pending.
+
 ## Environment
 - Backend: 0.0.0.0:8001 via supervisor
 - Frontend: 3000 via supervisor (hot reload)

@@ -10,6 +10,7 @@ from datetime import datetime, timezone
 import os
 import uuid
 import logging
+from packing import packing_summary
 
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
@@ -43,6 +44,8 @@ async def next_seq(kind: str, prefix: str) -> str:
         upsert=True,
         return_document=True,
     )
+    if kind == "PLAN":
+        return f"P/{year}/{doc['n']:02d}"
     return f"{prefix}-{year}-{doc['n']:04d}"
 
 
@@ -94,12 +97,14 @@ class WorkerIn(BaseModel):
 class PlanConfigSize(BaseModel):
     size: str
     pairs: int
+    pairs_per_bag: Optional[int] = Field(default=None, gt=0, strict=True)
 
 
 class PlanConfigIn(BaseModel):
     article_id: str
     name: str
     sizes: List[PlanConfigSize]
+    pairs_per_bag: Optional[int] = Field(default=None, gt=0, strict=True)
     active: bool = True
 
 
@@ -180,7 +185,7 @@ class GeneratePlansIn(BaseModel):
 
 class SizeQty(BaseModel):
     size: str
-    qty: int
+    qty: int = Field(ge=0, strict=True)
 
 
 class BagIn(BaseModel):
@@ -189,10 +194,19 @@ class BagIn(BaseModel):
     remarks: Optional[str] = None
 
 
-class ReturnIn(BaseModel):
+class PackingIn(BaseModel):
     bags: List[BagIn]
-    # size-wise good/rework/reject
-    size_results: List[Dict[str, Any]]  # {size, good, rework, reject}
+
+
+class ReturnSizeResult(BaseModel):
+    size: str
+    good: int = Field(ge=0, strict=True)
+    rework: int = Field(ge=0, strict=True)
+    reject: int = Field(ge=0, strict=True)
+
+
+class ReturnIn(PackingIn):
+    size_results: List[ReturnSizeResult]
     remarks: Optional[str] = None
 
 
@@ -536,6 +550,61 @@ async def get_customer_order(id: str):
     return {"order": clean(o), "plans": plans}
 
 
+# Packing rules are fixed when a return is recorded, not inferred from its row count.
+async def plan_packing_rule(plan):
+    pc = await db.plan_configurations.find_one({"id": plan["plan_config_id"]}) or {}
+    overrides = {s["size"]: s.get("pairs_per_bag") for s in pc.get("sizes", [])}
+    return {s["size"]: overrides.get(s["size"]) or pc.get("pairs_per_bag") for s in plan["sizes_snapshot"]}
+
+
+async def return_packing(ret, plan):
+    saved_rule = ret.get("packing_rule_snapshot")
+    previous_bags = ret.get("total_bags")
+    rule = saved_rule or await plan_packing_rule(plan)
+    summary = packing_summary(ret["bags"], rule)
+    for i, row in enumerate(ret["bags"]):
+        row["serial_no"] = i + 1
+        row["total"] = summary["row_totals"][i]
+    ret.update(summary)
+    # Never overwrite source-row dispatch flags while enriching a read response.
+    if not summary["packing_error"] and (not saved_rule or previous_bags != summary["total_bags"]):
+        await db.fabricator_returns.update_one({"id": ret["id"]}, {"$set": {
+            **summary, "total_bag_pairs": summary["total_pairs"],
+        }})
+    return ret
+
+
+async def ensure_qc_ticket(plan, return_id):
+    if plan.get("pending_qc"):
+        return plan["pending_qc"]
+    ticket = {"id": new_id(), "qc_no": await next_seq("QC", "QC"),
+              "inspection_date": now_iso(), "return_id": return_id}
+    updated = await db.production_plans.find_one_and_update(
+        {"id": plan["id"], "pending_qc": None}, {"$set": {"pending_qc": ticket}}, return_document=True)
+    if updated:
+        return updated["pending_qc"]
+    current = await db.production_plans.find_one({"id": plan["id"]})
+    return current["pending_qc"]
+
+
+async def attach_plan_dates(plans):
+    by_id = {p["id"]: p for p in plans}
+    for p in plans:
+        pending = p.get("pending_qc") or {}
+        p["qc_no"] = pending.get("qc_no")
+        p["qc_date"] = pending.get("inspection_date")
+        p["dispatch_date"] = None
+    async for q in db.qc_records.find({"plan_id": {"$in": list(by_id)}}).sort("inspection_date", -1):
+        p = by_id[q["plan_id"]]
+        if not p["qc_no"]:
+            p["qc_no"], p["qc_date"] = q["qc_no"], q["inspection_date"]
+    async for d in db.dispatches.find({"plan_ids": {"$in": list(by_id)}, "status": "DISPATCHED"}).sort("dispatch_date", -1):
+        for pid in d["plan_ids"]:
+            if pid in by_id and not by_id[pid]["dispatch_date"]:
+                by_id[pid]["dispatch_date"] = d["dispatch_date"]
+    return plans
+
+
 # ==================== PRODUCTION PLANS ====================
 @api.post("/plans/generate")
 async def generate_plans(inp: GeneratePlansIn):
@@ -605,7 +674,7 @@ async def list_plans(status: Optional[str] = None):
         else:
             q["status"] = status
     plans = [clean(p) for p in await db.production_plans.find(q).sort("created_at", -1).to_list(2000)]
-    return plans
+    return await attach_plan_dates(plans)
 
 
 @api.get("/plans/{id}")
@@ -616,9 +685,19 @@ async def get_plan(id: str):
     p = clean(p)
     # attach related docs
     p["fabricator_jobs"] = [clean(x) for x in await db.fabricator_jobs.find({"plan_id": id}).to_list(100)]
-    p["returns"] = [clean(x) for x in await db.fabricator_returns.find({"plan_id": id}).to_list(100)]
-    p["qc_records"] = [clean(x) for x in await db.qc_records.find({"plan_id": id}).to_list(100)]
+    p["returns"] = [await return_packing(clean(x), p) for x in await db.fabricator_returns.find({"plan_id": id}).sort("return_date", 1).to_list(100)]
+    p["qc_records"] = [clean(x) for x in await db.qc_records.find({"plan_id": id}).sort("inspection_date", 1).to_list(100)]
+    p["packing_rule"] = await plan_packing_rule(p)
+    await attach_plan_dates([p])
     return p
+
+
+@api.post("/plans/{id}/packing-preview")
+async def preview_packing(id: str, inp: PackingIn):
+    p = await db.production_plans.find_one({"id": id})
+    if not p:
+        raise HTTPException(404, "Plan not found")
+    return packing_summary([b.model_dump() for b in inp.bags], await plan_packing_rule(p))
 
 
 def _record_event(plan_id: str, action: str, user: str = "system"):
@@ -760,29 +839,24 @@ async def receive_stitching(id: str, inp: ReturnIn):
     if p["status"] not in ("STITCHING_OUT",):
         raise HTTPException(400, f"Plan must be in STITCHING_OUT; current: {p['status']}")
 
-    # validate size totals do not exceed plan sizes
     plan_sizes = {s["size"]: s["pairs"] for s in p["sizes_snapshot"]}
+    summary = packing_summary([b.model_dump() for b in inp.bags], await plan_packing_rule(p))
+    if summary["packing_error"]:
+        raise HTTPException(400, summary["packing_error"])
+    if not inp.bags or any(total == 0 for total in summary["row_totals"]):
+        raise HTTPException(400, "Each packing row must contain at least one pair")
+    returned = {}
     for sr in inp.size_results:
-        total = sr.get("good", 0) + sr.get("rework", 0) + sr.get("reject", 0)
-        if total > plan_sizes.get(sr["size"], 0):
-            raise HTTPException(400, f"Size {sr['size']} return ({total}) exceeds plan size ({plan_sizes.get(sr['size'], 0)})")
-
-    # validate bag sizes match totals
-    bag_size_totals: Dict[str, int] = {}
-    for b in inp.bags:
-        for s in b.sizes:
-            bag_size_totals[s.size] = bag_size_totals.get(s.size, 0) + s.qty
-    for sr in inp.size_results:
-        total = sr.get("good", 0) + sr.get("rework", 0) + sr.get("reject", 0)
-        # rework goes back; but bags carry actual physical items -> good + rework typically in bags
-        # We'll validate bag size <= plan size
-        if bag_size_totals.get(sr["size"], 0) > plan_sizes.get(sr["size"], 0):
-            raise HTTPException(400, f"Bag totals for size {sr['size']} exceed plan size")
-
+        if sr.size not in plan_sizes or sr.size in returned:
+            raise HTTPException(400, "Return sizes must be unique and match the plan")
+        returned[sr.size] = sr.good + sr.rework + sr.reject
+    for size, limit in plan_sizes.items():
+        if returned.get(size, 0) != summary["size_totals"][size]:
+            raise HTTPException(400, f"Size {size}: packing quantity must equal Good + Rework + Reject")
+        if summary["size_totals"][size] > limit:
+            raise HTTPException(400, f"Packing totals for size {size} exceed plan size ({limit})")
     ret_no = await next_seq("RET", "RET")
-    total_returned = sum(sr.get("good", 0) + sr.get("rework", 0) + sr.get("reject", 0) for sr in inp.size_results)
-    total_bags = len(inp.bags)
-    total_bag_pairs = sum(sum(s.qty for s in b.sizes) for b in inp.bags)
+    total_returned = sum(returned.values())
 
     doc = {
         "id": new_id(),
@@ -792,14 +866,13 @@ async def receive_stitching(id: str, inp: ReturnIn):
         "fabricator_id": p.get("fabricator_id"),
         "fabricator_name": p.get("fabricator_name"),
         "return_date": now_iso(),
-        "bags": [{"bag_no": b.bag_no, "sizes": [s.model_dump() for s in b.sizes],
-                  "total": sum(s.qty for s in b.sizes),
-                  "remarks": b.remarks,
-                  "dispatched": False} for b in inp.bags],
-        "size_results": inp.size_results,
+        "bags": [{"bag_no": str(i + 1), "serial_no": i + 1, "sizes": [s.model_dump() for s in b.sizes],
+                  "total": summary["row_totals"][i], "remarks": b.remarks,
+                  "dispatched": False} for i, b in enumerate(inp.bags)],
+        "size_results": [sr.model_dump() for sr in inp.size_results],
         "total_returned": total_returned,
-        "total_bags": total_bags,
-        "total_bag_pairs": total_bag_pairs,
+        **summary,
+        "total_bag_pairs": summary["total_pairs"],
         "remarks": inp.remarks,
     }
     await db.fabricator_returns.insert_one(doc)
@@ -816,8 +889,9 @@ async def receive_stitching(id: str, inp: ReturnIn):
         "current_stage": "QC",
         "events": ev,
     }})
+    ticket = await ensure_qc_ticket(p, doc["id"])
     await audit("RECEIVE_STITCHING", "plan", id, details={"returned": total_returned})
-    return {"ok": True, "return_no": ret_no}
+    return {"ok": True, "return_no": ret_no, **summary, "pending_qc": ticket}
 
 
 @api.post("/plans/{id}/qc")
@@ -844,14 +918,16 @@ async def do_qc(id: str, inp: QCIn):
         total_rework += sr.rework
         total_hold += sr.hold
 
-    qc_no = await next_seq("QC", "QC")
+    ticket = await ensure_qc_ticket(p, ret["id"])
+    qc_no = ticket["qc_no"]
     doc = {
-        "id": new_id(),
+        "id": ticket["id"],
         "qc_no": qc_no,
         "plan_id": id,
         "plan_no": p["plan_no"],
         "return_id": ret["id"],
-        "inspection_date": now_iso(),
+        "inspection_date": ticket["inspection_date"],
+        "completed_at": now_iso(),
         "size_results": [sr.model_dump() for sr in inp.size_results],
         "defects": inp.defects,
         "remarks": inp.remarks,
@@ -903,9 +979,17 @@ async def do_qc(id: str, inp: QCIn):
         "current_stage": stage,
         "qc_passed_by_size": accumulated,
         "events": ev,
-    }})
+    }, "$unset": {"pending_qc": ""}})
     await audit("QC", "plan", id, details={"pass": total_pass, "rework": total_rework, "hold": total_hold})
     return {"ok": True, "qc_no": qc_no, "status": new_status}
+
+
+@api.get("/qc-records/{id}")
+async def get_qc_record(id: str):
+    q = await db.qc_records.find_one({"id": id})
+    if not q:
+        raise HTTPException(404, "QC record not found")
+    return {"qc": clean(q), "plan": await get_plan(q["plan_id"])}
 
 
 class ReworkReturnIn(BaseModel):
@@ -920,6 +1004,8 @@ async def rework_return(id: str, inp: ReworkReturnIn):
         raise HTTPException(404, "Plan not found")
     if p["status"] != "REWORK":
         raise HTTPException(400, f"Plan must be in REWORK; current: {p['status']}")
+    ret = await db.fabricator_returns.find_one({"plan_id": id}, sort=[("return_date", -1)])
+    await ensure_qc_ticket(p, ret["id"])
     ev = p.get("events", []) + [_record_event(id, "Rework Returned to QC")]
     await db.production_plans.update_one({"id": id}, {"$set": {
         "status": "QC", "current_stage": "QC", "events": ev,
@@ -966,10 +1052,47 @@ async def finished_stock():
 
 
 # ==================== DISPATCH ====================
+async def dispatch_packing(doc):
+    groups = {}
+    rows = []
+    for row in doc["bags"]:
+        rid = row["return_id"]
+        if rid not in groups:
+            ret = await db.fabricator_returns.find_one({"id": rid})
+            plan = await db.production_plans.find_one({"id": row["plan_id"]})
+            ret = await return_packing(clean(ret), plan)
+            groups[rid] = {"return_id": rid, "return_no": ret["return_no"],
+                           "plan_id": plan["id"], "plan_no": plan["plan_no"],
+                           "article_id": plan["article_id"], "colour_id": plan.get("colour_id"),
+                           "plan_config_id": plan["plan_config_id"], "plan_config_name": plan["plan_config_name"],
+                           "packing_rule_snapshot": ret["packing_rule_snapshot"], "bags": []}
+        group = groups[rid]
+        group["bags"].append(row)
+        rows.append(row)
+    size_totals = {}
+    errors = []
+    for group in groups.values():
+        summary = packing_summary(group["bags"], group["packing_rule_snapshot"])
+        group.update(summary)
+        for i, row in enumerate(group["bags"]):
+            row["total"] = summary["row_totals"][i]
+        if summary["packing_error"]:
+            errors.append(f"{group['plan_no']}: {summary['packing_error']}")
+        for size, qty in summary["size_totals"].items():
+            size_totals[size] = size_totals.get(size, 0) + qty
+    return {"bags": rows, "packing_groups": list(groups.values()), "packing_row_count": len(rows),
+            "total_pairs": sum(g["total_pairs"] for g in groups.values()),
+            "total_bags": None if errors else sum(g["total_bags"] for g in groups.values()),
+            "size_totals": size_totals, "packing_error": "; ".join(errors) if errors else None}
+
+
 @api.get("/dispatches")
 async def list_dispatches(status: Optional[str] = None):
     q = {"status": status} if status else {}
-    return [clean(d) for d in await db.dispatches.find(q).sort("created_at", -1).to_list(2000)]
+    docs = [clean(d) for d in await db.dispatches.find(q).sort("created_at", -1).to_list(2000)]
+    for d in docs:
+        d.update(await dispatch_packing(d))
+    return docs
 
 
 @api.get("/dispatches/{id}")
@@ -977,103 +1100,107 @@ async def get_dispatch(id: str):
     d = await db.dispatches.find_one({"id": id})
     if not d:
         raise HTTPException(404, "Dispatch not found")
-    return clean(d)
+    d = clean(d)
+    d.update(await dispatch_packing(d))
+    return d
 
 
 @api.get("/available-bags")
 async def available_bags(plan_ids: str):
-    """Get undispatched bags for given plans (comma-separated)."""
+    """Original undispatched packing rows; bag_no is an internal source-row reference."""
     ids = [x.strip() for x in plan_ids.split(",") if x.strip()]
-    bags = []
+    rows = []
     for pid in ids:
-        async for r in db.fabricator_returns.find({"plan_id": pid}):
-            plan = await db.production_plans.find_one({"id": pid})
-            for b in r["bags"]:
-                if b.get("dispatched"):
-                    continue
-                bags.append({
-                    "return_id": r["id"],
-                    "return_no": r["return_no"],
-                    "plan_id": pid,
-                    "plan_no": plan["plan_no"] if plan else None,
-                    "fabricator_name": r.get("fabricator_name"),
-                    "bag_no": b["bag_no"],
-                    "sizes": b["sizes"],
-                    "total": b["total"],
-                    "remarks": b.get("remarks"),
-                })
-    return bags
+        plan = await db.production_plans.find_one({"id": pid})
+        if not plan or plan["status"] != "FINISHED":
+            continue
+        async for source in db.fabricator_returns.find({"plan_id": pid}).sort("return_date", 1):
+            ret = await return_packing(clean(source), plan)
+            for row in ret["bags"]:
+                if not row.get("dispatched"):
+                    rows.append({"return_id": ret["id"], "return_no": ret["return_no"],
+                                 "plan_id": pid, "plan_no": plan["plan_no"],
+                                 "fabricator_name": ret.get("fabricator_name"), **row})
+    return rows
+
+
+async def prepare_dispatch(inp):
+    if not inp.plan_ids or len(inp.plan_ids) != len(set(inp.plan_ids)):
+        raise HTTPException(400, "Select unique plans")
+    plans_data = []
+    for pid in inp.plan_ids:
+        p = await db.production_plans.find_one({"id": pid})
+        if not p or p["status"] != "FINISHED":
+            raise HTTPException(400, "Selected plans must be in Finished Stock")
+        order = await db.customer_orders.find_one({"id": p["customer_order_id"]})
+        if not order or order["customer_id"] != inp.customer_id:
+            raise HTTPException(400, "Selected plans do not belong to the chosen customer")
+        plans_data.append(p)
+    if not inp.bags:
+        raise HTTPException(400, "Select packing rows")
+    seen = set()
+    rows = []
+    for ref in inp.bags:
+        key = (ref.return_id, ref.bag_no)
+        if key in seen:
+            raise HTTPException(400, "A packing row cannot be selected twice")
+        seen.add(key)
+        ret = await db.fabricator_returns.find_one({"id": ref.return_id})
+        if not ret or ret["plan_id"] not in inp.plan_ids:
+            raise HTTPException(400, "Packing row does not belong to the selected plans")
+        plan = next(p for p in plans_data if p["id"] == ret["plan_id"])
+        target = next((b for b in ret["bags"] if b["bag_no"] == ref.bag_no), None)
+        if not target or target.get("dispatched"):
+            raise HTTPException(400, "Packing row is missing or already dispatched")
+        serial = next(i + 1 for i, b in enumerate(ret["bags"]) if b["bag_no"] == ref.bag_no)
+        rows.append({"return_id": ref.return_id, "return_no": ret["return_no"],
+                     "plan_id": plan["id"], "plan_no": plan["plan_no"],
+                     "article_id": plan["article_id"], "colour_id": plan.get("colour_id"),
+                     "plan_config_id": plan["plan_config_id"], "fabricator_name": ret.get("fabricator_name"),
+                     "bag_no": ref.bag_no, "serial_no": serial,
+                     "sizes": target["sizes"], "total": sum(s["qty"] for s in target["sizes"])})
+    if set(inp.plan_ids) != {r["plan_id"] for r in rows}:
+        raise HTTPException(400, "Select at least one packing row from each selected plan")
+    rows.sort(key=lambda r: (inp.plan_ids.index(r["plan_id"]), r["return_id"], r["serial_no"]))
+    summary = await dispatch_packing({"bags": rows})
+    if summary["packing_error"]:
+        raise HTTPException(400, summary["packing_error"])
+    # Validate the entire selection before writing any stock deductions.
+    requirements = {}
+    for row in rows:
+        for cell in row["sizes"]:
+            key = (row["plan_id"], cell["size"])
+            requirements[key] = requirements.get(key, 0) + cell["qty"]
+    for (pid, size), qty in requirements.items():
+        current = 0
+        async for tx in db.finished_stock_transactions.find({"plan_id": pid, "size": size}):
+            current += tx["signed_qty"]
+        if current < qty:
+            raise HTTPException(400, f"Insufficient QC-passed finished stock for size {size} (have {current}, need {qty})")
+    return plans_data, summary
+
+
+@api.post("/dispatches/preview")
+async def preview_dispatch(inp: DispatchIn):
+    _, summary = await prepare_dispatch(inp)
+    return summary
 
 
 @api.post("/dispatches")
 async def create_dispatch(inp: DispatchIn):
-    # Load selected plans and derive COs / articles / colours
-    plans_data = []
-    for pid in inp.plan_ids:
-        p = await db.production_plans.find_one({"id": pid})
-        if not p:
-            raise HTTPException(400, f"Plan {pid} not found")
-        plans_data.append(p)
+    plans_data, summary = await prepare_dispatch(inp)
     customer_order_ids = list({p["customer_order_id"] for p in plans_data})
-
-    # Validate customer consistency
-    for coid in customer_order_ids:
-        o = await db.customer_orders.find_one({"id": coid})
-        if not o or o["customer_id"] != inp.customer_id:
-            raise HTTPException(400, "Selected plans do not belong to the chosen customer")
-
-    # Aggregate what will be dispatched from selected bags
-    size_qty: Dict[str, int] = {}
-    bag_details = []
-    for bref in inp.bags:
-        r = await db.fabricator_returns.find_one({"id": bref.return_id})
-        if not r:
-            raise HTTPException(400, "Return not found")
-        target = next((b for b in r["bags"] if b["bag_no"] == bref.bag_no), None)
-        if not target:
-            raise HTTPException(400, f"Bag {bref.bag_no} not found")
-        if target.get("dispatched"):
-            raise HTTPException(400, f"Bag {bref.bag_no} already dispatched")
-        for s in target["sizes"]:
-            size_qty[s["size"]] = size_qty.get(s["size"], 0) + s["qty"]
-        plan_of_bag = next((p for p in plans_data if p["id"] == r["plan_id"]), None)
-        bag_details.append({
-            "return_id": bref.return_id,
-            "return_no": r["return_no"],
-            "plan_id": r["plan_id"],
-            "plan_no": r["plan_no"],
-            "article_id": plan_of_bag.get("article_id") if plan_of_bag else None,
-            "colour_id": plan_of_bag.get("colour_id") if plan_of_bag else None,
-            "plan_config_id": plan_of_bag.get("plan_config_id") if plan_of_bag else None,
-            "fabricator_name": r.get("fabricator_name"),
-            "bag_no": bref.bag_no,
-            "sizes": target["sizes"],
-            "total": target["total"],
-        })
-
+    bag_details = summary["bags"]
     dsp_no = await next_seq("DSP", "DSP")
-    total_bags = len(bag_details)
-    total_pairs = sum(b["total"] for b in bag_details)
 
-    # Deduct finished stock per (plan, size) based on bag composition
+    # All selected rows have been validated before any stock write.
     for b in bag_details:
         pid = b["plan_id"]
         for s in b["sizes"]:
-            cur = 0
-            async for tx in db.finished_stock_transactions.find({"plan_id": pid, "size": s["size"]}):
-                cur += tx["signed_qty"]
-            if cur < s["qty"]:
-                raise HTTPException(400, f"Insufficient finished stock for plan {b['plan_no']} size {s['size']} (have {cur}, need {s['qty']})")
             await db.finished_stock_transactions.insert_one({
-                "id": new_id(),
-                "plan_id": pid,
-                "plan_no": b["plan_no"],
-                "size": s["size"],
-                "qty": s["qty"],
-                "signed_qty": -s["qty"],
-                "kind": "DISPATCH",
-                "dispatch_no": dsp_no,
-                "at": now_iso(),
+                "id": new_id(), "plan_id": pid, "plan_no": b["plan_no"],
+                "size": s["size"], "qty": s["qty"], "signed_qty": -s["qty"],
+                "kind": "DISPATCH", "dispatch_no": dsp_no, "at": now_iso(),
             })
 
     # Mark bags dispatched
@@ -1118,10 +1245,7 @@ async def create_dispatch(inp: DispatchIn):
         "co_nos": co_nos,
         "customer_pos": customer_pos,
         "plan_ids": inp.plan_ids,
-        "bags": bag_details,
-        "size_totals": size_qty,
-        "total_bags": total_bags,
-        "total_pairs": total_pairs,
+        **summary,
         "transporter": inp.transporter,
         "vehicle_lr": inp.vehicle_lr,
         "remarks": inp.remarks,
@@ -1377,6 +1501,7 @@ async def seed(force: bool = False):
     }
     men_a04 = {
         "id": new_id(), "article_id": a04["id"], "name": "Men 6-10", "active": True,
+        "pairs_per_bag": 20,
         "sizes": [{"size": "6", "pairs": 60}, {"size": "7", "pairs": 120}, {"size": "8", "pairs": 120}, {"size": "9", "pairs": 120}, {"size": "10", "pairs": 60}],
         "created_at": now_iso(),
     }
@@ -1462,6 +1587,23 @@ async def seed(force: bool = False):
 @api.get("/")
 async def root():
     return {"app": "NAMAN UPPER", "status": "running"}
+
+
+@app.on_event("startup")
+async def initialize_packing_metadata():
+    # Only the user's confirmed Article 04 / Men 6–10 rule is initialized.
+    article = await db.articles.find_one({"code": "04"})
+    if article:
+        await db.plan_configurations.update_many(
+            {"article_id": article["id"], "name": "Men 6-10", "pairs_per_bag": {"$exists": False}},
+            {"$set": {"pairs_per_bag": 20}})
+    async for p in db.production_plans.find({"status": "QC", "pending_qc": None}):
+        ret = await db.fabricator_returns.find_one({"plan_id": p["id"]}, sort=[("return_date", -1)])
+        if ret:
+            await ensure_qc_ticket(p, ret["id"])
+    async for d in db.dispatches.find({"packing_groups": {"$exists": False}}):
+        summary = await dispatch_packing(clean(d))
+        await db.dispatches.update_one({"id": d["id"]}, {"$set": summary})
 
 
 app.include_router(api)

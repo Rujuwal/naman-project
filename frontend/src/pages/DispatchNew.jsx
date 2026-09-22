@@ -18,6 +18,22 @@ export default function DispatchNew() {
   const [bags, setBags] = useState([]);
   const [selectedBags, setSelectedBags] = useState([]);
   const [form, setForm] = useState({ transporter: "", vehicle_lr: "", remarks: "" });
+  const [summary, setSummary] = useState(null);
+  const [summaryError, setSummaryError] = useState("");
+
+  useEffect(() => {
+    let active = true;
+    setSummary(null); setSummaryError("");
+    if (!selectedBags.length) return;
+    const timer = setTimeout(() => {
+      api.post("/dispatches/preview", {
+        customer_id: customerId, plan_ids: selectedPlans.map((p) => p.id),
+        bags: selectedBags.map((b) => ({ return_id: b.return_id, bag_no: b.bag_no })),
+      }).then((data) => { if (active) setSummary(data); })
+        .catch((e) => { if (active) setSummaryError(typeof e.response?.data?.detail === "string" ? e.response.data.detail : "Unable to calculate packing totals"); });
+    }, 150);
+    return () => { active = false; clearTimeout(timer); };
+  }, [customerId, selectedPlans, selectedBags]);
 
   useEffect(() => { api.get("/customers").then(setCustomers); }, []);
 
@@ -27,37 +43,31 @@ export default function DispatchNew() {
     setSelectedPlans([]); setBags([]); setSelectedBags([]);
   }, [customerId]);
 
-  const togglePlan = async (p) => {
-    let sp;
-    if (selectedPlans.find((x) => x.id === p.id)) sp = selectedPlans.filter((x) => x.id !== p.id);
-    else sp = [...selectedPlans, p];
-    setSelectedPlans(sp);
-    if (sp.length > 0) {
-      const b = await api.get(`/available-bags?plan_ids=${sp.map((x) => x.id).join(",")}`);
-      setBags(b);
-    } else setBags([]);
-    setSelectedBags([]);
-  };
+  const togglePlan = (p) => setSelectedPlans((prev) => prev.some((x) => x.id === p.id) ? prev.filter((x) => x.id !== p.id) : [...prev, p]);
+
+  useEffect(() => {
+    let active = true;
+    setBags([]); setSelectedBags([]);
+    if (!selectedPlans.length) return;
+    api.get(`/available-bags?plan_ids=${selectedPlans.map((x) => x.id).join(",")}`).then((data) => {
+      if (active) setBags(data);
+    }).catch(() => { if (active) toast.error("Unable to load packing rows"); });
+    return () => { active = false; };
+  }, [selectedPlans]);
 
   const toggleBag = (b) => {
     const key = `${b.return_id}|${b.bag_no}`;
-    if (selectedBags.find((x) => `${x.return_id}|${x.bag_no}` === key)) setSelectedBags(selectedBags.filter((x) => `${x.return_id}|${x.bag_no}` !== key));
-    else setSelectedBags([...selectedBags, b]);
+    setSelectedBags((prev) => prev.some((x) => `${x.return_id}|${x.bag_no}` === key) ? prev.filter((x) => `${x.return_id}|${x.bag_no}` !== key) : [...prev, b]);
   };
-  const selectAllBagsForPlan = (planId) => {
-    const forPlan = bags.filter((b) => b.plan_id === planId);
-    const others = selectedBags.filter((b) => b.plan_id !== planId);
-    setSelectedBags([...others, ...forPlan]);
-  };
+  const selectAllBagsForPlan = (planId) => setSelectedBags((prev) => [...prev.filter((b) => b.plan_id !== planId), ...bags.filter((b) => b.plan_id === planId)]);
 
-  const totalPairs = selectedBags.reduce((a, b) => a + b.total, 0);
   const bagsByPlan = {};
   bags.forEach((b) => { (bagsByPlan[b.plan_id] ||= []).push(b); });
 
   const submit = async () => {
     if (!customerId) return toast.error("Select customer");
     if (selectedPlans.length === 0) return toast.error("Select plans");
-    if (selectedBags.length === 0) return toast.error("Select bags");
+    if (selectedBags.length === 0) return toast.error("Select packing rows");
     try {
       const r = await api.post("/dispatches", {
         customer_id: customerId,
@@ -72,7 +82,7 @@ export default function DispatchNew() {
 
   return (
     <div data-testid="dispatch-new-page">
-      <PageHeader title="New Dispatch" subtitle="Select customer, ready plans and bags" />
+      <PageHeader title="New Dispatch" subtitle="Select customer, ready plans and original packing rows" />
 
       <Card className="p-4 mb-4">
         <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
@@ -118,24 +128,24 @@ export default function DispatchNew() {
       </Card>
 
       <Card className="p-4 mb-4">
-        <div className="font-display font-semibold mb-2">Bags per Plan</div>
-        {selectedPlans.length === 0 && <div className="text-slate-500 text-sm">Select plans to see available bags.</div>}
+        <div className="font-display font-semibold mb-2">Packing Rows per Plan</div>
+        {selectedPlans.length === 0 && <div className="text-slate-500 text-sm">Select plans to see the original packing matrix.</div>}
         {selectedPlans.map((p) => (
           <div key={p.id} className="mb-3">
             <div className="flex items-center justify-between mb-1">
               <div className="font-semibold text-sm">Plan {p.plan_no} <span className="text-slate-500 font-normal">· {p.article_code} · {p.colour_name}</span></div>
-              <Button size="sm" variant="outline" onClick={() => selectAllBagsForPlan(p.id)} data-testid={`select-all-${p.plan_no}`}>Select All Bags</Button>
+              <Button size="sm" variant="outline" onClick={() => selectAllBagsForPlan(p.id)} data-testid={`select-all-${p.plan_no}`}>Select All Rows</Button>
             </div>
             <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
-              {(bagsByPlan[p.id] || []).length === 0 && <div className="text-slate-500 text-xs">No available bags for this plan.</div>}
+              {(bagsByPlan[p.id] || []).length === 0 && <div className="text-slate-500 text-xs">No available packing rows for this plan.</div>}
               {(bagsByPlan[p.id] || []).map((b, i) => {
                 const key = `${b.return_id}|${b.bag_no}`;
                 const sel = !!selectedBags.find((x) => `${x.return_id}|${x.bag_no}` === key);
                 return (
-                  <div key={i} onClick={() => toggleBag(b)} data-testid={`bag-card-${b.plan_no}-${b.bag_no}`}
+                  <div key={i} onClick={() => toggleBag(b)} data-testid={`packing-card-${b.plan_no}-${b.serial_no}`}
                     className={`p-3 border rounded cursor-pointer ${sel ? "border-blue-500 bg-blue-50" : "border-slate-200"}`}>
                     <div className="flex items-center justify-between">
-                      <div className="flex items-center gap-2"><Checkbox checked={sel} /><span className="font-mono">Bag {b.bag_no}</span></div>
+                      <div className="flex items-center gap-2"><Checkbox checked={sel} data-testid={`select-packing-${b.return_id}-${b.serial_no}`} /><span className="font-mono" data-testid={`packing-label-${b.return_id}-${b.serial_no}`}>S. No. {b.serial_no}</span></div>
                       <div className="font-mono font-semibold">{b.total} prs</div>
                     </div>
                     <div className="text-xs mt-1">{b.sizes.map((s) => `${s.size}:${s.qty}`).join(" · ")}</div>
@@ -147,9 +157,14 @@ export default function DispatchNew() {
         ))}
       </Card>
 
+      {summaryError && <div role="alert" className="text-red-700 text-sm mb-3" data-testid="dispatch-packing-error">{summaryError}</div>}
       <div className="flex items-center justify-between">
-        <div className="text-sm">Selected: <span className="font-mono font-semibold">{selectedBags.length}</span> bags · <span className="font-mono font-semibold">{totalPairs}</span> pairs</div>
-        <div className="flex gap-2"><Button variant="outline" onClick={() => nav(-1)}>Cancel</Button><Button onClick={submit} data-testid="submit-dispatch">Create Dispatch</Button></div>
+        <div className="text-sm flex gap-5 flex-wrap">
+          <span data-testid="dispatch-selected-rows">Packing rows: <strong>{selectedBags.length}</strong></span>
+          <span data-testid="dispatch-total-bags">TOTAL BAGS: <strong>{summary?.total_bags ?? (selectedBags.length ? "—" : 0)}</strong></span>
+          <span data-testid="dispatch-total-pairs">TOTAL PAIRS: <strong>{summary?.total_pairs ?? (selectedBags.length ? "—" : 0)}</strong></span>
+        </div>
+        <div className="flex gap-2"><Button variant="outline" onClick={() => nav(-1)} data-testid="cancel-new-dispatch">Cancel</Button><Button onClick={submit} disabled={!summary || !!summaryError} data-testid="submit-dispatch">Create Dispatch</Button></div>
       </div>
     </div>
   );

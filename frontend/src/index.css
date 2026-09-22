@@ -85,25 +85,34 @@ h1, h2, h3, h4, h5, h6, .font-display {
 .badge-hold { @apply bg-yellow-100 text-yellow-900; }
 .badge-dispatched { @apply bg-teal-100 text-teal-900; }
 
-/* Print styles */
-@media print {
-    .no-print { display: none !important; }
-    body { background: white; }
-    .print-page { margin: 0; padding: 10mm; }
-}
-
+/* All factory slips use a vertical A5 sheet. Long documents continue onto portrait pages. */
+@page { size: A5 portrait; margin: 8mm; }
 .print-page {
+    box-sizing: border-box;
     background: white;
-    max-width: 148mm; /* A5 default */
-    margin: 0 auto;
-    padding: 10mm;
+    width: 148mm;
+    max-width: 100%;
+    min-height: 210mm;
+    margin: 16px auto;
+    padding: 8mm;
+    box-shadow: 0 2px 12px #0f172a12;
     font-family: 'Inter', sans-serif;
     color: #0f172a;
 }
-.print-a4 { max-width: 210mm; }
+@media print {
+    .no-print { display: none !important; }
+    html, body { background: white; margin: 0; padding: 0; }
+    body { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+    .print-page { width: 100%; max-width: none; min-height: 0; margin: 0; padding: 0; box-shadow: none; }
+    .print-page thead { display: table-header-group; }
+    .print-page tr, .print-header, .totals-strip, .sign-block { break-inside: avoid; }
+    .section-title, .plan-block h4 { break-after: avoid; }
+}
 
 .print-header {
     display: flex;
+    flex-direction: column;
+    gap: 8px;
     justify-content: space-between;
     align-items: flex-start;
     border-bottom: 3px double #0f172a;
@@ -200,5 +209,17 @@ h1, h2, h3, h4, h5, h6, .font-display {
 }
 .blank-line { display: inline-block; border-bottom: 1px solid #94a3b8; min-width: 120px; height: 14px; }
 .check-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 4px; font-size: 11px; margin: 6px 0; }
-.check-grid .chk { display: flex; align-items: center; gap: 6px; }
+    .check-grid .chk { display: flex; align-items: center; gap: 6px; }
+    .doc-meta > div { min-width: 0; flex-wrap: wrap; }
+    .doc-meta .val { overflow-wrap: anywhere; }
+    .print-page table { table-layout: fixed; }
+    .print-page th, .print-page td { overflow-wrap: anywhere; }
+    .print-page .plan-block h4 { align-items: flex-start; flex-direction: column; gap: 4px; }
+    .print-page .plan-meta { flex-wrap: wrap; }
+    .packing-rule-note { font-size: 9px; color: #475569; margin-top: 6px; }
+    .print-title-block { text-align: left; }
+    .print-page .sign-block { gap: 12px; }
+    .print-page .blank-line { min-width: 50px; max-width: 100%; }
+    .check-grid { grid-template-columns: repeat(2, 1fr); }
+
 .check-box { width: 12px; height: 12px; border: 1px solid #475569; display: inline-block; }
