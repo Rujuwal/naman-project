@@ -3,11 +3,11 @@ import { useParams } from "react-router-dom";
 import { api } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Printer } from "lucide-react";
+import PrintHeader from "@/components/PrintHeader";
 
 export default function PrintDispatch() {
   const { id } = useParams();
   const [d, setD] = useState(null);
-  const [orders, setOrders] = useState([]);
   const [customers, setCustomers] = useState([]);
   const [articles, setArticles] = useState([]);
   const [colours, setColours] = useState([]);
@@ -15,50 +15,84 @@ export default function PrintDispatch() {
 
   useEffect(() => {
     api.get(`/dispatches/${id}`).then(setD);
-    api.get("/customer-orders").then(setOrders);
     api.get("/customers").then(setCustomers);
     api.get("/articles").then(setArticles);
     api.get("/colours").then(setColours);
     api.get("/plan-configs").then(setPcs);
   }, [id]);
   if (!d) return null;
-  const order = orders.find((o) => o.id === d.customer_order_id);
-  const customer = customers.find((c) => c.id === order?.customer_id);
-  const article = articles.find((a) => a.id === d.article_id);
-  const colour = colours.find((c) => c.id === d.colour_id);
-  const pc = pcs.find((p) => p.id === d.plan_config_id);
-  const sizeCols = pc?.sizes?.map((s) => s.size) || [];
+  const customer = customers.find((c) => c.id === d.customer_id);
+  const aName = (id) => articles.find((a) => a.id === id)?.code || "-";
+  const cName = (id) => colours.find((c) => c.id === id)?.name || "-";
+  const pcName = (id) => pcs.find((p) => p.id === id)?.name || "-";
+
+  // Group bags by plan_id
+  const byPlan = {};
+  d.bags.forEach((b) => { (byPlan[b.plan_id] ||= { plan_no: b.plan_no, article_id: b.article_id, colour_id: b.colour_id, plan_config_id: b.plan_config_id, bags: [] }).bags.push(b); });
+  const planGroups = Object.values(byPlan);
+
+  const allSizesForGroup = (g) => {
+    const set = new Set();
+    g.bags.forEach((b) => b.sizes.forEach((s) => set.add(s.size)));
+    // preserve order from plan_config if available
+    const pc = pcs.find((p) => p.id === g.plan_config_id);
+    if (pc) return pc.sizes.map((s) => s.size).filter((s) => set.has(s));
+    return Array.from(set);
+  };
 
   return (
     <div>
       {d.status === "CANCELLED" && <div className="cancelled-watermark">CANCELLED</div>}
       <div className="no-print p-4 bg-slate-100 flex justify-end"><Button onClick={() => window.print()}><Printer size={14} className="mr-1" />Print</Button></div>
       <div className="print-page print-a4">
-        <h1>DISPATCH SLIP</h1>
-        <table className="mb-2"><tbody>
-          <tr><td>Dispatch No.</td><td>{d.dispatch_no}</td><td>Date</td><td>{new Date(d.dispatch_date).toLocaleString()}</td></tr>
-          <tr><td>Customer</td><td colSpan="3">{customer?.name || "-"}</td></tr>
-          <tr><td>Order No.</td><td>{order?.co_no || "-"}</td><td>Article</td><td>{article?.code} - {article?.name}</td></tr>
-          <tr><td>Colour</td><td>{colour?.name}</td><td>Configuration</td><td>{pc?.name}</td></tr>
-        </tbody></table>
-        <div className="text-xs font-semibold mb-1">PACKING LIST</div>
-        <table className="mb-3">
-          <thead><tr><th>Bag No.</th>{sizeCols.map((s) => <th key={s}>{s}</th>)}<th>Total</th></tr></thead>
-          <tbody>
-            {d.bags.map((b, i) => (
-              <tr key={i}><td>{b.bag_no}</td>{sizeCols.map((s) => <td key={s}>{b.sizes.find((x) => x.size === s)?.qty || 0}</td>)}<td>{b.total}</td></tr>
-            ))}
-            <tr><td><strong>Total</strong></td>{sizeCols.map((s) => <td key={s}><strong>{d.size_totals[s] || 0}</strong></td>)}<td><strong>{d.total_pairs}</strong></td></tr>
-          </tbody>
-        </table>
-        <div className="text-center font-semibold text-sm mb-3">TOTAL BAGS: {d.total_bags} · TOTAL PAIRS: {d.total_pairs}</div>
-        <table className="mb-3"><tbody>
-          <tr><td>Transporter</td><td>{d.transporter || "-"}</td><td>Vehicle / LR</td><td>{d.vehicle_lr || "-"}</td></tr>
-          <tr><td>Remarks</td><td colSpan="3">{d.remarks || "-"}</td></tr>
-        </tbody></table>
-        <div className="mt-6 grid grid-cols-2 gap-6 text-xs">
-          <div>_________________<br />Dispatch Signature</div>
-          <div>_________________<br />Receiver Signature</div>
+        <PrintHeader title="Dispatch Slip" subtitle={d.dispatch_no} />
+        <div className="doc-meta">
+          <div><span className="lbl">Dispatch No.</span><span className="val">{d.dispatch_no}</span></div>
+          <div><span className="lbl">Date</span><span className="val">{new Date(d.dispatch_date).toLocaleDateString()}</span></div>
+          <div><span className="lbl">Customer</span><span className="val">{customer?.name || "-"}</span></div>
+          <div><span className="lbl">Customer PO No.</span><span className="val">{(d.customer_pos && d.customer_pos.length) ? d.customer_pos.join(", ") : "-"}</span></div>
+          <div><span className="lbl">Order No(s).</span><span className="val">{(d.co_nos || []).join(", ") || "-"}</span></div>
+          <div><span className="lbl">Plans</span><span className="val">{planGroups.length}</span></div>
+          <div><span className="lbl">Transporter</span><span className="val">{d.transporter || "-"}</span></div>
+          <div><span className="lbl">Vehicle / LR</span><span className="val">{d.vehicle_lr || "-"}</span></div>
+        </div>
+
+        <div className="totals-strip">
+          <div><div className="k">Total Plans</div><div className="v">{planGroups.length}</div></div>
+          <div><div className="k">Total Bags</div><div className="v">{d.total_bags}</div></div>
+          <div><div className="k">Total Pairs</div><div className="v">{d.total_pairs}</div></div>
+        </div>
+
+        {planGroups.map((g) => {
+          const sizes = allSizesForGroup(g);
+          const totals = sizes.map((s) => g.bags.reduce((a, b) => a + (b.sizes.find((x) => x.size === s)?.qty || 0), 0));
+          const groupTotal = g.bags.reduce((a, b) => a + b.total, 0);
+          return (
+            <div className="plan-block" key={g.plan_no}>
+              <h4>
+                <span>Plan {g.plan_no}</span>
+                <span style={{fontSize: 11, color: '#64748b'}}>{aName(g.article_id)} · {cName(g.colour_id)} · {pcName(g.plan_config_id)}</span>
+              </h4>
+              <div className="plan-meta">
+                <span>Bags: {g.bags.length}</span>
+                <span>Pairs: {groupTotal}</span>
+              </div>
+              <table>
+                <thead><tr><th>Bag No.</th>{sizes.map((s) => <th key={s}>{s}</th>)}<th>Total</th></tr></thead>
+                <tbody>
+                  {g.bags.map((b, i) => <tr key={i}><td>{b.bag_no}</td>{sizes.map((s) => <td key={s}>{b.sizes.find((x) => x.size === s)?.qty || 0}</td>)}<td>{b.total}</td></tr>)}
+                  <tr className="total-row"><td>Total</td>{totals.map((t, i) => <td key={i}>{t}</td>)}<td>{groupTotal}</td></tr>
+                </tbody>
+              </table>
+            </div>
+          );
+        })}
+
+        {d.remarks && <div style={{fontSize: 11, marginTop: 8}}><strong>Remarks:</strong> {d.remarks}</div>}
+
+        <div className="sign-block">
+          <div><div className="sign-line">Dispatch Signature</div></div>
+          <div><div className="sign-line">Receiver Signature</div></div>
         </div>
       </div>
     </div>

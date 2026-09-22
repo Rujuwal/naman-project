@@ -3,6 +3,7 @@ import { useParams } from "react-router-dom";
 import { api } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Printer } from "lucide-react";
+import PrintHeader from "@/components/PrintHeader";
 
 export default function PrintPrinting() {
   const { planId } = useParams();
@@ -22,28 +23,37 @@ export default function PrintPrinting() {
   return (
     <div>
       <div className="no-print p-4 bg-slate-100 flex justify-end"><Button onClick={() => window.print()}><Printer size={14} className="mr-1" />Print</Button></div>
-      <div className="print-page">
-        <h1>PRINTING ORDER</h1>
-        <table className="mb-2"><tbody>
-          <tr><td>Printing No.</td><td>{plan.printing_no || "-"}</td><td>Plan No.</td><td>{plan.plan_no}</td></tr>
-          <tr><td>Issue Date</td><td>{plan.printing_started_at ? new Date(plan.printing_started_at).toLocaleDateString() : "-"}</td><td>Issue Time</td><td>{plan.printing_started_at ? new Date(plan.printing_started_at).toLocaleTimeString() : "-"}</td></tr>
-          <tr><td>Article</td><td>{article?.code}</td><td>Colour</td><td>{colour?.name}</td></tr>
-          <tr><td>Configuration</td><td colSpan="3">{plan.plan_config_name}</td></tr>
-        </tbody></table>
-        <div className="text-xs font-semibold mb-1">SIZE BREAKUP</div>
-        <table className="mb-3">
+      <div className="print-page print-a4">
+        <PrintHeader title="Printing Order" subtitle="Production Work Slip" />
+        <div className="doc-meta">
+          <div><span className="lbl">Printing No.</span><span className="val">{plan.printing_no || "-"}</span></div>
+          <div><span className="lbl">Plan No.</span><span className="val">{plan.plan_no}</span></div>
+          <div><span className="lbl">Issue Date</span><span className="val">{plan.printing_started_at ? new Date(plan.printing_started_at).toLocaleDateString() : "-"}</span></div>
+          <div><span className="lbl">Issue Time</span><span className="val">{plan.printing_started_at ? new Date(plan.printing_started_at).toLocaleTimeString() : "-"}</span></div>
+          <div><span className="lbl">Article</span><span className="val">{article?.code} — {article?.name}</span></div>
+          <div><span className="lbl">Colour</span><span className="val">{colour?.name}</span></div>
+          <div><span className="lbl">Configuration</span><span className="val">{plan.plan_config_name}</span></div>
+          <div><span className="lbl">Plan Qty</span><span className="val">{plan.qty} pairs</span></div>
+        </div>
+
+        <div className="section-title">Size Breakup</div>
+        <table>
           <thead><tr><th>Size</th>{plan.sizes_snapshot.map((s) => <th key={s.size}>{s.size}</th>)}<th>Total</th></tr></thead>
           <tbody><tr><td>Pairs</td>{plan.sizes_snapshot.map((s) => <td key={s.size}>{s.pairs}</td>)}<td><strong>{plan.qty}</strong></td></tr></tbody>
         </table>
-        <div className="text-xs font-semibold mb-1">PRINTING DETAILS</div>
-        <table className="mb-3"><tbody>
-          <tr><td>Artwork / Printing</td><td>__________________</td></tr>
-          <tr><td>Printing Colour</td><td>__________________</td></tr>
-          <tr><td>Special Instructions</td><td>__________________</td></tr>
-        </tbody></table>
-        <div className="mt-8 grid grid-cols-2 gap-6 text-xs">
-          <div>_________________<br />Worker Signature</div>
-          <div>_________________<br />Supervisor Signature</div>
+
+        <div className="section-title">Printing Details</div>
+        <table>
+          <tbody>
+            <tr><td style={{width: '30%', textAlign: 'left'}}>Artwork / Printing</td><td style={{textAlign: 'left'}}>&nbsp;</td></tr>
+            <tr><td style={{textAlign: 'left'}}>Printing Colour</td><td style={{textAlign: 'left'}}>&nbsp;</td></tr>
+            <tr><td style={{textAlign: 'left'}}>Special Instructions</td><td style={{textAlign: 'left', height: '50px'}}>&nbsp;</td></tr>
+          </tbody>
+        </table>
+
+        <div className="sign-block">
+          <div>Worker Name: <span className="blank-line" /><div className="sign-line">Worker Signature</div></div>
+          <div>Date/Time: <span className="blank-line" /><div className="sign-line">Supervisor Signature</div></div>
         </div>
       </div>
     </div>

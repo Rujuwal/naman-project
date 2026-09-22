@@ -9,7 +9,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogTrigger } from "@/components/ui/dialog";
 import { toast } from "sonner";
-import { Trash2, Plus, Printer } from "lucide-react";
+import { Trash2, Plus, Printer, XCircle } from "lucide-react";
 
 export default function PlanDetail() {
   const { id } = useParams();
@@ -18,6 +18,8 @@ export default function PlanDetail() {
   const [articles, setArticles] = useState([]);
   const [colours, setColours] = useState([]);
   const [shortages, setShortages] = useState(null);
+  const [cancelOpen, setCancelOpen] = useState(false);
+  const [cancelReason, setCancelReason] = useState("");
 
   // fabricator issue form
   const [fab, setFab] = useState({ fabricator_id: "", due_date: "", instructions: "" });
@@ -118,6 +120,16 @@ export default function PlanDetail() {
     catch (e) { toast.error(e.response?.data?.detail || "Failed"); }
   };
 
+  const cancelPlan = async () => {
+    if (!cancelReason.trim()) return toast.error("Enter reason");
+    try {
+      await api.post(`/plans/${id}/cancel`, { reason: cancelReason });
+      toast.success("Plan cancelled");
+      setCancelOpen(false); setCancelReason("");
+      load();
+    } catch (e) { toast.error(e.response?.data?.detail || "Failed"); }
+  };
+
   const actionButton = () => {
     switch (plan.status) {
       case "PLANNED":
@@ -215,7 +227,9 @@ export default function PlanDetail() {
           </Dialog>
         </>;
       case "QC":
-        return <Dialog open={qcOpen} onOpenChange={setQcOpen}>
+        return <>
+          <a href={`/print/qc-blank/${plan.id}`} target="_blank" rel="noreferrer"><Button variant="outline" data-testid="btn-print-qc-blank"><Printer size={14} className="mr-1" />QC Slip (blank)</Button></a>
+          <Dialog open={qcOpen} onOpenChange={setQcOpen}>
           <DialogTrigger asChild><Button data-testid="btn-qc">Perform QC</Button></DialogTrigger>
           <DialogContent className="max-w-3xl">
             <DialogHeader><DialogTitle>QC - {plan.plan_no}</DialogTitle></DialogHeader>
@@ -247,7 +261,8 @@ export default function PlanDetail() {
             </div>
             <DialogFooter><Button onClick={submitQC} data-testid="confirm-qc">Save QC</Button></DialogFooter>
           </DialogContent>
-        </Dialog>;
+        </Dialog>
+        </>;
       case "REWORK":
         return <Button onClick={reworkReturn} data-testid="btn-rework-return">Return to QC</Button>;
       case "FINISHED":
@@ -261,7 +276,27 @@ export default function PlanDetail() {
     <div data-testid="plan-detail-page">
       <PageHeader title={plan.plan_no}
         subtitle={`${article?.code || ""} ${article?.name || ""} · ${colour?.name || ""} · ${plan.plan_config_name}`}
-        actions={<div className="flex gap-2">{actionButton()}</div>} />
+        actions={
+          <div className="flex gap-2">
+            {actionButton()}
+            {!["CANCELLED", "DISPATCHED"].includes(plan.status) && (
+              <Button variant="outline" onClick={() => setCancelOpen(true)} data-testid="btn-cancel-plan" className="text-red-600 border-red-300 hover:bg-red-50">
+                <XCircle size={14} className="mr-1" />Cancel Plan
+              </Button>
+            )}
+          </div>
+        } />
+
+      <Dialog open={cancelOpen} onOpenChange={setCancelOpen}>
+        <DialogContent>
+          <DialogHeader><DialogTitle>Cancel Plan {plan.plan_no}?</DialogTitle></DialogHeader>
+          <div className="py-2 space-y-2">
+            <div className="text-sm text-slate-600">Any consumed materials will be returned to stock. QC-passed pairs (if any) will be removed from finished stock. This action cannot be undone.</div>
+            <Textarea placeholder="Reason for cancellation" value={cancelReason} onChange={(e) => setCancelReason(e.target.value)} data-testid="cancel-plan-reason" />
+          </div>
+          <DialogFooter><Button variant="destructive" onClick={cancelPlan} data-testid="confirm-cancel-plan">Confirm Cancel</Button></DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-6">
         <Card className="p-4 lg:col-span-2">

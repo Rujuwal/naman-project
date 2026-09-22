@@ -14,6 +14,8 @@ const TABS = [
   { key: "QC", label: "QC" },
   { key: "REWORK", label: "Rework" },
   { key: "FINISHED", label: "Finished Stock" },
+  { key: "DISPATCHED", label: "Dispatched" },
+  { key: "CANCELLED", label: "Cancelled" },
 ];
 
 export default function Production() {
@@ -35,7 +37,7 @@ export default function Production() {
   const actionLabel = (s) => ({
     PLANNED: "Start Cutting", CUTTING: "Issue to Printing", PRINTING: "Issue to Fabricator",
     STITCHING_OUT: "Receive Stitching", QC: "Perform QC", REWORK: "Return to QC",
-    FINISHED: "View", DISPATCHED: "View",
+    FINISHED: "View", DISPATCHED: "View", CANCELLED: "View",
   }[s] || "View");
 
   return (

@@ -83,49 +83,122 @@ h1, h2, h3, h4, h5, h6, .font-display {
 .badge-dispatched { @apply bg-teal-100 text-teal-900; }
 .badge-cancelled { @apply bg-rose-100 text-rose-900; }
 .badge-hold { @apply bg-yellow-100 text-yellow-900; }
+.badge-dispatched { @apply bg-teal-100 text-teal-900; }
 
 /* Print styles */
 @media print {
     .no-print { display: none !important; }
     body { background: white; }
-    .print-page {
-        margin: 0;
-        padding: 12mm;
-    }
+    .print-page { margin: 0; padding: 10mm; }
 }
 
 .print-page {
     background: white;
-    max-width: 148mm; /* A5 */
+    max-width: 148mm; /* A5 default */
     margin: 0 auto;
-    padding: 12mm;
+    padding: 10mm;
     font-family: 'Inter', sans-serif;
     color: #0f172a;
 }
 .print-a4 { max-width: 210mm; }
-.print-page h1 {
-    font-family: 'Outfit', sans-serif;
-    font-size: 20px;
-    text-align: center;
-    margin: 0 0 6px 0;
+
+.print-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    border-bottom: 3px double #0f172a;
+    padding-bottom: 8px;
+    margin-bottom: 12px;
+}
+.print-brand { display: flex; align-items: center; gap: 10px; }
+.print-brand-mark {
+    width: 40px; height: 40px; border-radius: 6px;
+    background: #0f172a; color: #fff;
+    display: flex; align-items: center; justify-content: center;
+    font-family: 'Outfit', sans-serif; font-weight: 800; font-size: 22px;
+}
+.print-brand-name {
+    font-family: 'Outfit', sans-serif; font-weight: 800;
+    font-size: 20px; letter-spacing: 0.02em; color: #0f172a;
+}
+.print-brand-tag {
+    font-size: 10px; letter-spacing: 0.15em;
+    text-transform: uppercase; color: #64748b;
+}
+.print-title-block { text-align: right; }
+.print-title {
+    font-family: 'Outfit', sans-serif; font-weight: 700;
+    font-size: 18px; text-transform: uppercase; letter-spacing: 0.06em; color: #0f172a;
+}
+.print-subtitle {
+    font-size: 10px; letter-spacing: 0.1em; text-transform: uppercase; color: #64748b;
+}
+.doc-meta {
+    display: grid; grid-template-columns: 1fr 1fr; gap: 4px 12px;
+    font-size: 12px; margin-bottom: 12px;
+}
+.doc-meta > div { display: flex; }
+.doc-meta .lbl {
+    color: #64748b; text-transform: uppercase; font-size: 10px;
+    letter-spacing: 0.08em; min-width: 90px;
+}
+.doc-meta .val { font-weight: 600; color: #0f172a; flex: 1; }
+
+.section-title {
+    font-family: 'Outfit', sans-serif; font-weight: 700; font-size: 11px;
+    letter-spacing: 0.12em; text-transform: uppercase; color: #0f172a;
+    border-left: 3px solid #0f172a; padding-left: 8px; margin: 14px 0 6px 0;
 }
 .print-page table {
     width: 100%;
     border-collapse: collapse;
-    font-size: 12px;
+    font-size: 11px;
 }
 .print-page th, .print-page td {
-    border: 1px solid #334155;
+    border: 1px solid #94a3b8;
     padding: 4px 6px;
     text-align: center;
 }
+.print-page th { background: #f1f5f9; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em; font-size: 10px; }
+.print-page tr.total-row td { background: #f8fafc; font-weight: 700; }
+.print-page .totals-strip {
+    display: flex; justify-content: space-around; align-items: center;
+    padding: 8px; background: #0f172a; color: #fff; font-family: 'Outfit', sans-serif;
+    margin: 8px 0 12px 0; border-radius: 4px;
+}
+.print-page .totals-strip .k { font-size: 10px; letter-spacing: 0.15em; opacity: 0.7; text-transform: uppercase; }
+.print-page .totals-strip .v { font-size: 20px; font-weight: 800; }
+.sign-block {
+    display: grid; grid-template-columns: 1fr 1fr; gap: 24px;
+    margin-top: 28px; font-size: 11px;
+}
+.sign-line {
+    border-top: 1px solid #64748b; padding-top: 4px; margin-top: 40px;
+    text-align: center; letter-spacing: 0.05em; text-transform: uppercase;
+    font-size: 10px; color: #475569;
+}
+.plan-block {
+    border: 1px solid #cbd5e1; border-radius: 4px; padding: 8px 10px; margin-bottom: 10px;
+}
+.plan-block h4 {
+    font-family: 'Outfit', sans-serif; margin: 0 0 6px 0; font-size: 13px;
+    display: flex; justify-content: space-between; align-items: center;
+}
+.plan-block .plan-meta {
+    display: flex; gap: 12px; font-size: 10px; color: #64748b;
+    text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: 4px;
+}
 .cancelled-watermark {
     position: fixed;
-    top: 40%;
-    left: 20%;
+    top: 40%; left: 20%;
     font-size: 96px;
     color: rgba(220, 38, 38, 0.18);
     transform: rotate(-25deg);
     pointer-events: none;
     z-index: 1000;
+    font-family: 'Outfit', sans-serif; font-weight: 900;
 }
+.blank-line { display: inline-block; border-bottom: 1px solid #94a3b8; min-width: 120px; height: 14px; }
+.check-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 4px; font-size: 11px; margin: 6px 0; }
+.check-grid .chk { display: flex; align-items: center; gap: 6px; }
+.check-box { width: 12px; height: 12px; border: 1px solid #475569; display: inline-block; }

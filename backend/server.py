@@ -216,10 +216,7 @@ class DispatchBagRef(BaseModel):
 
 
 class DispatchIn(BaseModel):
-    customer_order_id: str
-    article_id: str
-    colour_id: str
-    plan_config_id: str
+    customer_id: str
     plan_ids: List[str]
     bags: List[DispatchBagRef]
     transporter: Optional[str] = None
@@ -1010,8 +1007,22 @@ async def available_bags(plan_ids: str):
 
 @api.post("/dispatches")
 async def create_dispatch(inp: DispatchIn):
-    # validate finished stock
-    # aggregate what will be dispatched from selected bags
+    # Load selected plans and derive COs / articles / colours
+    plans_data = []
+    for pid in inp.plan_ids:
+        p = await db.production_plans.find_one({"id": pid})
+        if not p:
+            raise HTTPException(400, f"Plan {pid} not found")
+        plans_data.append(p)
+    customer_order_ids = list({p["customer_order_id"] for p in plans_data})
+
+    # Validate customer consistency
+    for coid in customer_order_ids:
+        o = await db.customer_orders.find_one({"id": coid})
+        if not o or o["customer_id"] != inp.customer_id:
+            raise HTTPException(400, "Selected plans do not belong to the chosen customer")
+
+    # Aggregate what will be dispatched from selected bags
     size_qty: Dict[str, int] = {}
     bag_details = []
     for bref in inp.bags:
@@ -1025,35 +1036,29 @@ async def create_dispatch(inp: DispatchIn):
             raise HTTPException(400, f"Bag {bref.bag_no} already dispatched")
         for s in target["sizes"]:
             size_qty[s["size"]] = size_qty.get(s["size"], 0) + s["qty"]
+        plan_of_bag = next((p for p in plans_data if p["id"] == r["plan_id"]), None)
         bag_details.append({
             "return_id": bref.return_id,
             "return_no": r["return_no"],
             "plan_id": r["plan_id"],
             "plan_no": r["plan_no"],
+            "article_id": plan_of_bag.get("article_id") if plan_of_bag else None,
+            "colour_id": plan_of_bag.get("colour_id") if plan_of_bag else None,
+            "plan_config_id": plan_of_bag.get("plan_config_id") if plan_of_bag else None,
             "fabricator_name": r.get("fabricator_name"),
             "bag_no": bref.bag_no,
             "sizes": target["sizes"],
             "total": target["total"],
         })
 
-    # validate finished stock for each plan/size
-    for pid in inp.plan_ids:
-        for size, qty in size_qty.items():
-            stock = 0
-            async for tx in db.finished_stock_transactions.find({"plan_id": pid, "size": size}):
-                stock += tx["signed_qty"]
-            # per-plan check: only decrement the actual bag qty coming from that plan
-        # we'll deduct on the fly below
-
     dsp_no = await next_seq("DSP", "DSP")
     total_bags = len(bag_details)
     total_pairs = sum(b["total"] for b in bag_details)
 
-    # deduct finished stock per (plan, size) based on bag composition
+    # Deduct finished stock per (plan, size) based on bag composition
     for b in bag_details:
         pid = b["plan_id"]
         for s in b["sizes"]:
-            # verify current stock in that plan+size
             cur = 0
             async for tx in db.finished_stock_transactions.find({"plan_id": pid, "size": s["size"]}):
                 cur += tx["signed_qty"]
@@ -1071,7 +1076,7 @@ async def create_dispatch(inp: DispatchIn):
                 "at": now_iso(),
             })
 
-    # mark bags dispatched
+    # Mark bags dispatched
     for bref in inp.bags:
         r = await db.fabricator_returns.find_one({"id": bref.return_id})
         for b in r["bags"]:
@@ -1080,18 +1085,38 @@ async def create_dispatch(inp: DispatchIn):
                 b["dispatch_no"] = dsp_no
         await db.fabricator_returns.update_one({"id": r["id"]}, {"$set": {"bags": r["bags"]}})
 
-    # increment plan dispatched_qty
+    # Increment plan dispatched_qty; update plan status when fully dispatched
+    plan_totals: Dict[str, int] = {}
     for b in bag_details:
-        await db.production_plans.update_one({"id": b["plan_id"]}, {"$inc": {"dispatched_qty": b["total"]}})
+        plan_totals[b["plan_id"]] = plan_totals.get(b["plan_id"], 0) + b["total"]
+    for pid, extra in plan_totals.items():
+        await db.production_plans.update_one({"id": pid}, {"$inc": {"dispatched_qty": extra}})
+        p2 = await db.production_plans.find_one({"id": pid})
+        if p2 and p2.get("dispatched_qty", 0) >= p2.get("qty", 0) and p2.get("status") != "CANCELLED":
+            ev = p2.get("events", []) + [_record_event(pid, "Dispatched (full)")]
+            await db.production_plans.update_one({"id": pid}, {"$set": {
+                "status": "DISPATCHED", "current_stage": "Dispatched", "events": ev,
+            }})
+
+    # Collect customer_pos and co_nos
+    customer_pos = []
+    co_nos = []
+    for coid in customer_order_ids:
+        o = await db.customer_orders.find_one({"id": coid})
+        if o:
+            co_nos.append(o.get("co_no"))
+            if o.get("customer_po"):
+                customer_pos.append(o["customer_po"])
 
     doc = {
         "id": new_id(),
         "dispatch_no": dsp_no,
         "dispatch_date": now_iso(),
-        "customer_order_id": inp.customer_order_id,
-        "article_id": inp.article_id,
-        "colour_id": inp.colour_id,
-        "plan_config_id": inp.plan_config_id,
+        "customer_id": inp.customer_id,
+        "customer_order_ids": customer_order_ids,
+        "customer_order_id": customer_order_ids[0] if customer_order_ids else None,
+        "co_nos": co_nos,
+        "customer_pos": customer_pos,
         "plan_ids": inp.plan_ids,
         "bags": bag_details,
         "size_totals": size_qty,
@@ -1139,6 +1164,13 @@ async def cancel_dispatch(id: str, inp: CancelIn):
                     bag.pop("dispatch_no", None)
             await db.fabricator_returns.update_one({"id": r["id"]}, {"$set": {"bags": r["bags"]}})
         await db.production_plans.update_one({"id": b["plan_id"]}, {"$inc": {"dispatched_qty": -b["total"]}})
+        # If plan was fully dispatched, revert status to FINISHED
+        p2 = await db.production_plans.find_one({"id": b["plan_id"]})
+        if p2 and p2.get("status") == "DISPATCHED" and p2.get("dispatched_qty", 0) < p2.get("qty", 0):
+            ev = p2.get("events", []) + [_record_event(b["plan_id"], "Dispatch Cancelled - back to Finished")]
+            await db.production_plans.update_one({"id": b["plan_id"]}, {"$set": {
+                "status": "FINISHED", "current_stage": "Finished Stock", "events": ev,
+            }})
 
     await db.dispatches.update_one({"id": id}, {"$set": {
         "status": "CANCELLED",
@@ -1147,6 +1179,89 @@ async def cancel_dispatch(id: str, inp: CancelIn):
     }})
     await audit("CANCEL", "dispatch", id, details={"reason": inp.reason})
     return {"ok": True}
+
+
+# ==================== CANCEL PLAN ====================
+@api.post("/plans/{id}/cancel")
+async def cancel_plan(id: str, inp: CancelIn):
+    p = await db.production_plans.find_one({"id": id})
+    if not p:
+        raise HTTPException(404, "Plan not found")
+    if p.get("status") in ("CANCELLED", "DISPATCHED"):
+        raise HTTPException(400, f"Cannot cancel plan in status {p.get('status')}")
+
+    # Reverse RM consumption for this plan if any
+    consumed = 0
+    async for tx in db.material_transactions.find({"plan_id": id, "kind": "MATERIAL_CONSUMPTION"}):
+        # emit reversing tx
+        await db.material_transactions.insert_one({
+            "id": new_id(),
+            "material_id": tx["material_id"],
+            "kind": "MATERIAL_RETURN",
+            "qty": tx["qty"],
+            "signed_qty": tx["qty"],
+            "plan_id": id,
+            "at": now_iso(),
+            "remarks": f"Plan {p['plan_no']} cancelled - material returned",
+        })
+        consumed += 1
+
+    # Reverse finished stock QC_PASS entries (only if no dispatch remains)
+    async for ftx in db.finished_stock_transactions.find({"plan_id": id, "kind": "QC_PASS"}):
+        await db.finished_stock_transactions.insert_one({
+            "id": new_id(),
+            "plan_id": id,
+            "plan_no": p["plan_no"],
+            "size": ftx["size"],
+            "qty": ftx["qty"],
+            "signed_qty": -ftx["qty"],
+            "kind": "ADJUSTMENT_OUT",
+            "at": now_iso(),
+            "remarks": "Plan cancelled",
+        })
+
+    # Decrement plans_generated on order item so order remaining is restored
+    order = await db.customer_orders.find_one({"id": p.get("customer_order_id")})
+    if order:
+        for it in order["items"]:
+            if it["id"] == p.get("order_item_id"):
+                it["plans_generated"] = max(0, it.get("plans_generated", 0) - 1)
+        await db.customer_orders.update_one({"id": order["id"]}, {"$set": {"items": order["items"]}})
+
+    ev = p.get("events", []) + [_record_event(id, f"Plan Cancelled: {inp.reason}")]
+    await db.production_plans.update_one({"id": id}, {"$set": {
+        "status": "CANCELLED",
+        "current_stage": "Cancelled",
+        "cancel_reason": inp.reason,
+        "cancelled_at": now_iso(),
+        "events": ev,
+    }})
+    await audit("CANCEL", "plan", id, details={"reason": inp.reason, "material_reversed": consumed})
+    return {"ok": True}
+
+
+# Ready plans for customer (FINISHED, not fully dispatched, not cancelled)
+@api.get("/customers/{customer_id}/ready-plans")
+async def customer_ready_plans(customer_id: str):
+    orders = [o async for o in db.customer_orders.find({"customer_id": customer_id})]
+    order_by_id = {o["id"]: o for o in orders}
+    order_ids = list(order_by_id.keys())
+    if not order_ids:
+        return []
+    plans = [clean(p) for p in await db.production_plans.find({
+        "customer_order_id": {"$in": order_ids}, "status": "FINISHED",
+    }).sort("created_at", 1).to_list(2000)]
+    articles = {a["id"]: a for a in await _list("articles")}
+    colours = {c["id"]: c for c in await _list("colours")}
+    pcs = {p["id"]: p for p in await _list("plan_configurations")}
+    for p in plans:
+        o = order_by_id.get(p.get("customer_order_id"), {})
+        p["customer_po"] = o.get("customer_po")
+        p["article_name"] = articles.get(p.get("article_id"), {}).get("name")
+        p["article_code"] = articles.get(p.get("article_id"), {}).get("code")
+        p["colour_name"] = colours.get(p.get("colour_id"), {}).get("name") if p.get("colour_id") else None
+        p["plan_config_name"] = pcs.get(p.get("plan_config_id"), {}).get("name")
+    return plans
 
 
 # ==================== DASHBOARD ====================

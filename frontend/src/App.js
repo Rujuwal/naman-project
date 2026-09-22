@@ -19,6 +19,7 @@ import PrintCutting from "@/pages/print/PrintCutting";
 import PrintPrinting from "@/pages/print/PrintPrinting";
 import PrintStitching from "@/pages/print/PrintStitching";
 import PrintQC from "@/pages/print/PrintQC";
+import PrintQCBlank from "@/pages/print/PrintQCBlank";
 import PrintDispatch from "@/pages/print/PrintDispatch";
 import { api } from "@/lib/api";
 
@@ -37,6 +38,7 @@ function App() {
         <Route path="/print/printing/:planId" element={<PrintPrinting />} />
         <Route path="/print/stitching/:planId" element={<PrintStitching />} />
         <Route path="/print/qc/:qcId" element={<PrintQC />} />
+        <Route path="/print/qc-blank/:planId" element={<PrintQCBlank />} />
         <Route path="/print/dispatch/:id" element={<PrintDispatch />} />
 
         <Route element={<Layout />}>
