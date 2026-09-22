@@ -1,0 +1,25 @@
+{
+  "summary": "BOM Editor fix VERIFIED in iteration_4. Masters.jsx line 201 material Select onValueChange now uses functional setForm updater; addLine/updLine/rmLine at lines 137-139 all use functional updaters. Repro flow passes end-to-end: (1) Add BOM → Article X → Rexine Black → 0.3 → save-bom captured POST /api/boms with lines[0].material_id='59b8dffe-...' and consumption_per_pair=0.3, 'BOM saved' toast shown, dialog closed, new v1 row appeared. (2) Edit existing BOM → added a new Buckle line via add-bom-line, set version=2 → PUT /api/boms/{id} fired with 6 lines including newly added material_id 5d790c91-... and qty 1.5, toast success. (3) Regression nav (Dashboard, Customer Orders, Production, Stock Room, Dispatch, Fabricators, Reports, Masters) all render with 0 JS console errors.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "BOM Dialog", "issues": ["Radix a11y warning: 'Missing Description or aria-describedby={undefined} for DialogContent' — cosmetic, unchanged from prior iterations."]}
+    ]
+  },
+  "test_report_links": ["/app/backend/tests/test_boms_and_regression.py", "/app/test_reports/pytest/pytest_results.xml"],
+  "action_items": ["(Optional) Add DialogDescription or aria-describedby to Dialog components in Masters.jsx to silence Radix a11y warning."],
+  "critical_code_review_comments": [
+    "Functional-updater pattern in BomMaster (lines 137-139, 201) is the correct defensive fix and eliminates the stale-closure risk seen in previous iterations. Consider applying the same pattern anywhere else the codebase chains multiple setState calls on the same key.",
+    "updLine could be refactored to accept a partial object (updLine(i, {material_id, uom})) to consolidate multi-key updates elegantly, but current fix is sufficient."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "100% (unchanged from iteration_2, 17/17 pytest)", "frontend": "100% for BOM Create + Edit + Add-line flows and regression nav"},
+  "test_credentials": "N/A (no auth)",
+  "seed_data_creation": "Created one new BOM: Article X, v1, line Rexine Black 0.3m (via UI). Also edited seed BOM 04 to add Buckle line 1.5pcs and version=2.",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "BOM Editor is fully functional. Confirmed both POST /api/boms and PUT /api/boms/{id} fire correctly with all line data including newly-selected material_id. No further BOM retesting needed unless code changes. Backend suite from iteration_2 remains valid.",
+  "rca of the issue": "Root cause of the previous stale-closure bug was chained non-functional setState calls (updLine called twice in a row for material_id and uom, second call overwriting the first because it captured pre-update `form`). Fix applied at Masters.jsx line 201: single setForm((prev) => {...}) functional updater that mutates both material_id and uom in one atomic state transition. Verified via network capture: POST payload now contains a non-empty material_id."
+}
