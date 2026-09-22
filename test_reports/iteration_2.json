@@ -1,0 +1,37 @@
+{
+  "summary": "Tested new BOM tab in Masters. Backend BOM CRUD (GET/POST/PUT /api/boms) works perfectly — 17/17 pytest cases pass including regression on 14 core endpoints and start-cutting for PLAN-2026-0003 (Article X). BOM tab UI loads, seeded rows render, dialog opens, article/colour/material selectors all appear with correct data-testids. HOWEVER: a real React state bug in BomMaster prevents saving a BOM from the UI — the Material Select's onValueChange calls updLine twice back-to-back (once for material_id, once for uom), both using the same stale form snapshot, so the second setForm overwrites material_id back to ''. Result: 'Add at least one BOM line' toast fires on Save even when the user did select a material. Backend API is unaffected; direct POST /api/boms works.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [
+      {
+        "component": "BomMaster (Masters.jsx L201)",
+        "issue": "Material Select onValueChange calls updLine(i,'material_id',v) then updLine(i,'uom',mUom(v)) sequentially. Each updLine does setForm({...form, lines: ll}) using the closure's `form`. The second call has a stale `form` where lines[i].material_id is still '', so it overwrites the first update. Effect: user selects a material, but material_id silently resets to empty and Save shows 'Add at least one BOM line'. Repro: open Add BOM, pick Article X, pick material 'Rexine Black', enter qty 0.3, click Save → toast 'Add at least one BOM line', no POST /api/boms fired.",
+        "selector": "[data-testid='bom-line-0-mat']",
+        "priority": "HIGH"
+      }
+    ],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_boms_and_regression.py",
+    "/app/test_reports/pytest/pytest_results.xml"
+  ],
+  "action_items": [
+    "Fix BomMaster material Select onValueChange to update material_id AND uom in a single setForm call (functional updater or combined line object). Suggested fix: `onValueChange={(v) => { const ll=[...form.lines]; ll[i]={...ll[i], material_id:v, uom:mUom(v)}; setForm({...form, lines:ll}); }}`. Same pattern review needed for any other place where updLine is chained.",
+    "Optional: add DialogDescription (or aria-describedby={undefined}) to the BOM dialog to silence the Radix a11y warning."
+  ],
+  "critical_code_review_comments": [
+    "Stale-closure bug in BomMaster material onValueChange — chained setState calls with a non-functional updater will always lose the earlier update. Use functional setForm(prev => ...) or merge fields in one update.",
+    "empty state object `empty` is defined inside the component but shared across renders — currently benign but worth freezing/useMemo if edited in place later.",
+    "openEdit spreads existing lines via `b.lines.length ? b.lines : empty.lines` — if user removes all lines then edits an existing BOM later, they share the same `empty.lines` reference (rare risk of aliasing)."
+  ],
+  "updated_files": ["/app/backend/tests/test_boms_and_regression.py"],
+  "success_rate": {"backend": "100%", "frontend": "50% (list renders, dialog opens, but save-new blocked by state bug)"},
+  "test_credentials": "N/A (no auth)",
+  "seed_data_creation": "None — used existing seed + 1 BOM (Article X v100) created via pytest to validate POST/PUT.",
+  "retest_needed": true,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Backend fully verified via /app/backend/tests/test_boms_and_regression.py (pytest). Only remaining issue is the material Select state bug in /app/frontend/src/pages/Masters.jsx line ~201. After main agent fixes onValueChange to update material_id + uom atomically, re-run the UI flow: nav-masters → BOM tab → Add BOM → pick Article X → pick material → qty → Save should succeed (toast 'BOM saved') and a new row should appear. Then Edit that row (data-testid edit-bom-<id>), change version to 2 and qty to 0.4, Save → row reflects update. Article X currently has BOMs v2 and v100 already, so Start Cutting on PLAN-2026-0003 is unblocked (verified — 'BOM not defined' error is gone).",
+  "rca of the issue": "React stale-closure with chained setState. In Masters.jsx line 201: `onValueChange={(v) => { updLine(i, 'material_id', v); updLine(i, 'uom', mUom(v)); }}`. Both updLine calls read the same `form` from the closure and each does `setForm({...form, lines: ll})`. React batches these updates; both use the pre-update `form`, so the second setForm's `ll` contains only the uom change (its base copy of lines[i] still has material_id=''). Fix by combining the two field updates into a single setForm call."
+}
