@@ -933,25 +933,36 @@ async def rework_return(id: str, inp: ReworkReturnIn):
 # ==================== FINISHED STOCK ====================
 @api.get("/finished-stock")
 async def finished_stock():
-    """Aggregate finished stock by article+colour+plan_config+plan+size."""
+    """Aggregate finished stock by plan+size, denormalize via plan lookup."""
     agg = {}
     async for tx in db.finished_stock_transactions.find({}):
-        key = (tx["article_id"], tx.get("colour_id"), tx["plan_config_id"], tx["plan_id"], tx["size"])
-        agg[key] = agg.get(key, 0) + tx["signed_qty"]
-    # denormalize
+        pid = tx.get("plan_id")
+        size = tx.get("size")
+        if not pid or not size:
+            continue
+        key = (pid, size)
+        agg[key] = agg.get(key, 0) + tx.get("signed_qty", 0)
+
     articles = {a["id"]: a for a in await _list("articles")}
     colours = {c["id"]: c for c in await _list("colours")}
     pcs = {p["id"]: p for p in await _list("plan_configurations")}
+    plans_cache = {}
     result = []
-    for (aid, cid, pcid, pid, size), qty in agg.items():
+    for (pid, size), qty in agg.items():
         if qty <= 0:
             continue
-        plan = await db.production_plans.find_one({"id": pid})
+        plan = plans_cache.get(pid)
+        if plan is None:
+            plan = await db.production_plans.find_one({"id": pid}) or {}
+            plans_cache[pid] = plan
+        aid = plan.get("article_id")
+        cid = plan.get("colour_id")
+        pcid = plan.get("plan_config_id")
         result.append({
             "article_id": aid, "article_name": articles.get(aid, {}).get("name"),
             "colour_id": cid, "colour_name": colours.get(cid, {}).get("name") if cid else None,
             "plan_config_id": pcid, "plan_config_name": pcs.get(pcid, {}).get("name"),
-            "plan_id": pid, "plan_no": plan.get("plan_no") if plan else None,
+            "plan_id": pid, "plan_no": plan.get("plan_no"),
             "size": size, "qty": qty,
         })
     return result
