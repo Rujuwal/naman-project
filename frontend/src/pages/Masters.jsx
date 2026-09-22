@@ -134,9 +134,9 @@ function BomMaster() {
     } catch (e) { toast.error(e.response?.data?.detail || "Failed"); }
   };
 
-  const addLine = () => setForm({ ...form, lines: [...form.lines, { material_id: "", consumption_per_pair: 0, uom: "m" }] });
-  const updLine = (i, k, v) => { const ll = [...form.lines]; ll[i] = { ...ll[i], [k]: v }; setForm({ ...form, lines: ll }); };
-  const rmLine = (i) => setForm({ ...form, lines: form.lines.filter((_, idx) => idx !== i) });
+  const addLine = () => setForm((prev) => ({ ...prev, lines: [...prev.lines, { material_id: "", consumption_per_pair: 0, uom: "m" }] }));
+  const updLine = (i, k, v) => setForm((prev) => { const ll = [...prev.lines]; ll[i] = { ...ll[i], [k]: v }; return { ...prev, lines: ll }; });
+  const rmLine = (i) => setForm((prev) => ({ ...prev, lines: prev.lines.filter((_, idx) => idx !== i) }));
 
   const aName = (id) => articles.find((a) => a.id === id)?.code || "-";
   const cName = (id) => colours.find((c) => c.id === id)?.name || "Any";
@@ -198,7 +198,7 @@ function BomMaster() {
                   {form.lines.map((l, i) => (
                     <tr key={i}>
                       <td className="pr-2 py-1">
-                        <Select value={l.material_id} onValueChange={(v) => { updLine(i, "material_id", v); updLine(i, "uom", mUom(v)); }}>
+                        <Select value={l.material_id} onValueChange={(v) => setForm((prev) => { const ll = [...prev.lines]; ll[i] = { ...ll[i], material_id: v, uom: mUom(v) }; return { ...prev, lines: ll }; })}>
                           <SelectTrigger data-testid={`bom-line-${i}-mat`}><SelectValue placeholder="Material" /></SelectTrigger>
                           <SelectContent>{materials.map((m) => <SelectItem key={m.id} value={m.id}>{m.name}</SelectItem>)}</SelectContent>
                         </Select>

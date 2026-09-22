@@ -1,0 +1,40 @@
+{
+  "summary": "Re-tested BOM Editor UI after main agent claimed to consolidate the two chained updLine calls into a single setForm. Result: the fix was NOT applied. /app/frontend/src/pages/Masters.jsx line 201 is byte-identical to iteration_2 — still `onValueChange={(v) => { updLine(i, 'material_id', v); updLine(i, 'uom', mUom(v)); }}`. UI repro of the bug confirmed: Masters → BOM → Add BOM → Article X → Material 'Rexine Black' → qty 0.3 → Save produces toast 'Add at least one BOM line' and NO POST /api/boms is fired. Dialog stays open, no new row added. Because the fix was not applied, the follow-on tests (edit BOM to change version/qty, add second BOM line) also cannot pass through the UI — they inherit the same stale-closure defect the moment a material is picked.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [
+      {
+        "component": "BomMaster (Masters.jsx L201)",
+        "issue": "FIX NOT APPLIED. Material Select onValueChange still chains two updLine calls with a non-functional setForm, so material_id is overwritten back to ''. Repro (verified in this run): open Add BOM, pick Article X, pick material 'Rexine Black', enter qty 0.3, click Save → error toast 'Add at least one BOM line', 0 POST/PUT requests to /api/boms captured. Apply the exact fix suggested in iteration_2: onValueChange={(v) => { const ll=[...form.lines]; ll[i]={...ll[i], material_id:v, uom:mUom(v)}; setForm({...form, lines:ll}); }} (or use functional setForm(prev => ...)).",
+        "selector": "[data-testid='bom-line-0-mat']",
+        "priority": "HIGH"
+      }
+    ],
+    "integration_issues": [
+      {"flow": "Create BOM (new)", "issue": "No POST /api/boms fired on Save because form.lines[i].material_id is '' due to stale-closure bug.", "affected_selectors": ["[data-testid='save-bom']", "[data-testid='bom-line-0-mat']"]},
+      {"flow": "Edit BOM", "issue": "Not verifiable via UI while the same Material Select bug blocks any line-material edits.", "affected_selectors": ["[data-testid^='edit-bom-']"]},
+      {"flow": "Add second BOM line", "issue": "Not verifiable — first line save path already broken.", "affected_selectors": ["[data-testid='add-bom-line']"]}
+    ],
+    "design_issues": [
+      {"screen": "BOM Dialog", "issues": ["Radix a11y warning: 'Missing Description or aria-describedby={undefined} for DialogContent' — cosmetic, unchanged since iteration_2."]}
+    ]
+  },
+  "test_report_links": ["/app/backend/tests/test_boms_and_regression.py", "/app/test_reports/pytest/pytest_results.xml"],
+  "action_items": [
+    "APPLY the material Select onValueChange fix — it is missing. Recommended one-liner in Masters.jsx line 201: onValueChange={(v) => { const ll=[...form.lines]; ll[i]={...ll[i], material_id:v, uom:mUom(v)}; setForm({...form, lines:ll}); }}.",
+    "Optionally use functional updater for all updLine calls to be defensive across the file.",
+    "After applying, re-verify: Add BOM → Article X → Rexine Black → 0.3 → Save produces 'BOM saved' toast, dialog closes, POST /api/boms fired with lines[0].material_id set."
+  ],
+  "critical_code_review_comments": [
+    "Main agent reported the fix was made but the source file is unchanged — please verify by diffing against iteration_2 before claiming a bug fixed.",
+    "Same stale-closure risk exists in the whole BomMaster file wherever multiple state fields need to change together. Consider refactoring updLine to accept a partial object: updLine(i, {material_id:v, uom:mUom(v)}) using functional setForm."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "100% (unchanged, verified in iteration_2)", "frontend": "0% for BOM save flow — same bug, fix not applied"},
+  "test_credentials": "N/A (no auth)",
+  "seed_data_creation": "None in this iteration.",
+  "retest_needed": true,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "The BomMaster material Select bug is still present because the code change from iteration_2's action_items was NOT applied. Do not repeat backend testing — iteration_2's pytest suite already covers 17/17. Once main agent actually edits Masters.jsx line 201, retest the exact flow: nav-masters → BOM tab → add-bom → bom-article (Article X) → bom-line-0-mat (Rexine Black) → bom-line-0-qty (0.3) → save-bom, expecting a 'BOM saved' toast and a captured POST /api/boms. Then test edit-bom-<id> with version=2, qty=0.4 → PUT /api/boms/{id}. Then test add-bom-line with two lines saved. Article X already has BOMs v2 and v100 seeded, so Start Cutting for PLAN-2026-0003 remains unblocked.",
+  "rca of the issue": "Root cause unchanged from iteration_2 — chained setState with closure over `form`. Fix was reported as applied by main agent but Masters.jsx line 201 is byte-for-byte identical to the previous iteration. Verified by viewing the file after the request. This appears to be a no-op commit or the main agent applied the change in a different file / branch. Ask main agent to re-open Masters.jsx line 201 and replace the onValueChange body with a single setForm({...form, lines: ll}) that sets both material_id and uom on ll[i] in one object spread."
+}
