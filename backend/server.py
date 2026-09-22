@@ -1194,7 +1194,14 @@ async def audit_logs(limit: int = 100):
 
 # ==================== SEED ====================
 @api.post("/seed")
-async def seed():
+async def seed(force: bool = False):
+    if force:
+        for c in ["customers", "articles", "colours", "uoms", "materials", "material_transactions",
+                  "fabricators", "workers", "plan_configurations", "component_configurations", "boms",
+                  "customer_orders", "production_plans", "fabricator_jobs", "fabricator_returns",
+                  "qc_records", "finished_stock_transactions", "dispatches", "audit_logs",
+                  "document_sequences"]:
+            await db[c].delete_many({})
     # idempotent seed - only if empty
     if await db.customers.count_documents({}) > 0:
         return {"ok": True, "note": "already seeded"}
@@ -1225,7 +1232,7 @@ async def seed():
 
     # Opening stock
     for m in materials:
-        qty = 500.0 if m["uom"] == "m" else 200.0
+        qty = 2000.0 if m["uom"] == "m" else 500.0
         await db.material_transactions.insert_one({
             "id": new_id(), "material_id": m["id"], "kind": "OPENING", "qty": qty, "signed_qty": qty,
             "remarks": "Opening stock", "at": now_iso(),
