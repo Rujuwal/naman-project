@@ -37,7 +37,7 @@ export default function Dispatch() {
             {dispatches.map((d) => (
               <tr key={d.id} data-testid={`dispatch-row-${d.dispatch_no}`}>
                 <td className="font-mono">{d.dispatch_no}</td>
-                <td className="text-sm">{new Date(d.dispatch_date).toLocaleString()}</td>
+                <td className="text-sm">{new Date(d.dispatch_date).toLocaleDateString()}</td>
                 <td className="font-mono">{d.total_bags}</td>
                 <td className="font-mono font-semibold">{d.total_pairs}</td>
                 <td>{d.transporter || "-"}</td>
