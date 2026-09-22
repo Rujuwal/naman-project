@@ -1,0 +1,131 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@import url('https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700;800&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap');
+
+body {
+    margin: 0;
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    background: #f8fafc;
+    color: #0f172a;
+}
+
+h1, h2, h3, h4, h5, h6, .font-display {
+    font-family: 'Outfit', sans-serif;
+    letter-spacing: -0.02em;
+}
+
+.font-mono, code, .doc-code {
+    font-family: 'JetBrains Mono', monospace;
+}
+
+@layer base {
+    :root {
+        --background: 210 40% 98%;
+        --foreground: 222 47% 11%;
+        --card: 0 0% 100%;
+        --card-foreground: 222 47% 11%;
+        --popover: 0 0% 100%;
+        --popover-foreground: 222 47% 11%;
+        --primary: 217 91% 40%;
+        --primary-foreground: 0 0% 100%;
+        --secondary: 210 40% 96%;
+        --secondary-foreground: 222 47% 11%;
+        --muted: 210 40% 96%;
+        --muted-foreground: 215 16% 47%;
+        --accent: 210 40% 96%;
+        --accent-foreground: 222 47% 11%;
+        --destructive: 0 84% 60%;
+        --destructive-foreground: 0 0% 100%;
+        --border: 214 32% 91%;
+        --input: 214 32% 91%;
+        --ring: 217 91% 40%;
+        --radius: 0.5rem;
+    }
+}
+
+@layer base {
+    * { @apply border-border; }
+    body { @apply bg-background text-foreground; }
+}
+
+/* Sidebar */
+.sidebar {
+    background: #0f172a;
+    color: #e2e8f0;
+}
+.sidebar a, .sidebar button {
+    color: #cbd5e1;
+}
+.sidebar a.active, .sidebar button.active {
+    background: #1e293b;
+    color: #ffffff;
+    border-left: 3px solid #3b82f6;
+}
+.sidebar a:hover, .sidebar button:hover {
+    background: #1e293b;
+    color: #ffffff;
+}
+
+.status-badge {
+    @apply inline-flex items-center px-2 py-0.5 rounded text-xs font-semibold uppercase tracking-wide;
+}
+.badge-planned { @apply bg-slate-200 text-slate-800; }
+.badge-cutting { @apply bg-amber-100 text-amber-900; }
+.badge-printing { @apply bg-purple-100 text-purple-900; }
+.badge-stitching_out { @apply bg-orange-100 text-orange-900; }
+.badge-qc { @apply bg-blue-100 text-blue-900; }
+.badge-rework { @apply bg-red-100 text-red-900; }
+.badge-finished { @apply bg-emerald-100 text-emerald-900; }
+.badge-dispatched { @apply bg-teal-100 text-teal-900; }
+.badge-cancelled { @apply bg-rose-100 text-rose-900; }
+.badge-hold { @apply bg-yellow-100 text-yellow-900; }
+
+/* Print styles */
+@media print {
+    .no-print { display: none !important; }
+    body { background: white; }
+    .print-page {
+        margin: 0;
+        padding: 12mm;
+    }
+}
+
+.print-page {
+    background: white;
+    max-width: 148mm; /* A5 */
+    margin: 0 auto;
+    padding: 12mm;
+    font-family: 'Inter', sans-serif;
+    color: #0f172a;
+}
+.print-a4 { max-width: 210mm; }
+.print-page h1 {
+    font-family: 'Outfit', sans-serif;
+    font-size: 20px;
+    text-align: center;
+    margin: 0 0 6px 0;
+}
+.print-page table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 12px;
+}
+.print-page th, .print-page td {
+    border: 1px solid #334155;
+    padding: 4px 6px;
+    text-align: center;
+}
+.cancelled-watermark {
+    position: fixed;
+    top: 40%;
+    left: 20%;
+    font-size: 96px;
+    color: rgba(220, 38, 38, 0.18);
+    transform: rotate(-25deg);
+    pointer-events: none;
+    z-index: 1000;
+}
