@@ -1,0 +1,18 @@
+{
+  "summary": "Verified bug fix for GET /api/finished-stock KeyError. All 7 critical backend endpoints return 200 with valid data. Frontend Stock Room and New Dispatch pages load without Emergent 'Unhandled rejection' overlay. Backend error log is clean after repeated calls — no KeyError. /api/finished-stock returns 5 rows (total qty 480) with all required denormalized fields (article_id/name, colour_id/name, plan_config_id/name, plan_id, plan_no, size, qty) and all qty > 0.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "Fix in finished_stock() correctly aggregates by (plan_id, size) and denormalizes via plan lookup; safely skips DISPATCH/DISPATCH_CANCEL tx rows lacking article/colour/plan_config fields. Behavior is now robust."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "100%", "frontend": "100%"},
+  "test_credentials": "N/A (no auth in app)",
+  "seed_data_creation": "Used existing seed data (dispatched + cancelled transactions already present).",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Bug fix for /api/finished-stock is confirmed. Verified endpoints: /api/finished-stock, /api/dashboard, /api/rm-stock, /api/material-requirement, /api/plans, /api/customer-orders, /api/dispatches — all return 200. Frontend nav-stock-room and nav-dispatch → new-dispatch flow verified visually; PLAN-2026-0001 shows Qty:480 matching API total.",
+  "rca of the issue": "OLD RCA (already fixed by main agent): GET /api/finished-stock iterated over finished_stock_transactions and unconditionally accessed tx['article_id'], but DISPATCH/DISPATCH_CANCEL transactions did not carry article_id/colour_id/plan_config_id (only QC_PASS did) — causing KeyError → 500 which triggered the Emergent overlay 'Unhandled rejection' on frontend. Fix: aggregate by (plan_id, size), denormalize article/colour/plan_config from a plan document lookup, skip rows missing plan_id or size. Verified: repeated calls produce no KeyError in backend.err.log."
+}
