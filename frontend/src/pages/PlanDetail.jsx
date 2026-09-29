@@ -20,6 +20,8 @@ export default function PlanDetail() {
   const [shortages, setShortages] = useState(null);
   const [cancelOpen, setCancelOpen] = useState(false);
   const [cancelReason, setCancelReason] = useState("");
+  const [closeRejectedOpen, setCloseRejectedOpen] = useState(false);
+  const [closeRejectedRemarks, setCloseRejectedRemarks] = useState("");
 
   // fabricator issue form
   const [fab, setFab] = useState({ fabricator_id: "", due_date: "", instructions: "" });
@@ -55,8 +57,11 @@ export default function PlanDetail() {
     setPlan(p);
     // init size grids from sizes_snapshot
     setSizeResults(p.sizes_snapshot.map((s) => ({ size: s.size, good: 0, rework: 0, reject: 0 })));
+    const qcSizes = p.qc_expected_by_size
+      ? p.sizes_snapshot.filter((s) => p.qc_expected_by_size[s.size] > 0)
+      : p.sizes_snapshot;
     setQc({
-      size_results: p.sizes_snapshot.map((s) => ({ size: s.size, passed: 0, rework: 0, hold: 0 })),
+      size_results: qcSizes.map((s) => ({ size: s.size, passed: 0, rework: 0, hold: 0 })),
       defects: [], remarks: "",
     });
   });
@@ -71,6 +76,22 @@ export default function PlanDetail() {
   if (!plan) return <div>Loading...</div>;
   const article = articles.find((a) => a.id === plan.article_id);
   const colour = colours.find((c) => c.id === plan.colour_id);
+  const calculatedSizeResults = plan.sizes_snapshot.map((s) => {
+    const entered = sizeResults.find((result) => result.size === s.size) || {};
+    const returned = packing?.size_totals?.[s.size] || 0;
+    const rework = entered.rework || 0;
+    const reject = entered.reject || 0;
+    return { size: s.size, returned, good: returned - rework - reject, rework, reject };
+  });
+  const returnAllocationError = calculatedSizeResults.find((result) => result.good < 0);
+  const qcReceivedQty = (size) => {
+    if (plan.qc_expected_by_size) return plan.qc_expected_by_size[size] || 0;
+    const ret = plan.returns?.[plan.returns.length - 1];
+    const result = ret?.size_results?.find((entry) => entry.size === size);
+    return result ? (result.good || 0) + (result.rework || 0) : 0;
+  };
+  const qcEntryError = qc.size_results.find((result) =>
+    result.passed + result.rework + result.hold !== qcReceivedQty(result.size));
 
   const startCutting = async () => {
     setShortages(null);
@@ -106,13 +127,20 @@ export default function PlanDetail() {
   const updBag = (i, k, v) => setBags((prev) => prev.map((b, idx) => idx === i ? { ...b, [k]: v } : b));
   const updBagSize = (i, size, v) => setBags((prev) => prev.map((b, idx) => idx === i ? { ...b, sizes: b.sizes.map((s) => s.size === size ? { ...s, qty: Number(v) } : s) } : b));
 
-  const updSR = (size, k, v) => setSizeResults((prev) => prev.map((s) => s.size === size ? { ...s, [k]: Number(v) } : s));
+  // The packing matrix is the source of the returned quantity. Only exception
+  // quantities are entered; good pairs are calculated as the remaining balance.
+  const updReturnException = (size, k, v) => setSizeResults((prev) => prev.map((s) => s.size === size ? { ...s, [k]: Number(v) } : s));
 
   const submitReturn = async () => {
     if (bags.length === 0) return toast.error("Add at least one packing row");
     if (!packing || packingError) return toast.error(packingError || "Wait for packing totals");
+    if (returnAllocationError) return toast.error(`Size ${returnAllocationError.size}: Rework + Reject cannot exceed the packing quantity`);
     try {
-      await api.post(`/plans/${id}/receive-stitching`, { bags, size_results: sizeResults, remarks: retRemarks });
+      await api.post(`/plans/${id}/receive-stitching`, {
+        bags,
+        size_results: calculatedSizeResults.map(({ size, good, rework, reject }) => ({ size, good, rework, reject })),
+        remarks: retRemarks,
+      });
       toast.success("Return recorded");
       setRetOpen(false); setBags([]); load();
     } catch (e) { toast.error(typeof e.response?.data?.detail === "string" ? e.response.data.detail : "Check entered values and try again"); }
@@ -121,6 +149,7 @@ export default function PlanDetail() {
   const updQC = (size, k, v) => setQc((prev) => ({ ...prev, size_results: prev.size_results.map((s) => s.size === size ? { ...s, [k]: Number(v) } : s) }));
 
   const submitQC = async () => {
+    if (qcEntryError) return toast.error(`Size ${qcEntryError.size}: Pass + Rework + Hold must equal received quantity (${qcReceivedQty(qcEntryError.size)})`);
     try {
       await api.post(`/plans/${id}/qc`, qc);
       toast.success("QC saved");
@@ -129,8 +158,16 @@ export default function PlanDetail() {
   };
 
   const reworkReturn = async () => {
-    try { await api.post(`/plans/${id}/rework-return`, { remarks: "" }); toast.success("Sent back to QC"); load(); }
+    try { await api.post(`/plans/${id}/rework-return`, { remarks: "" }); toast.success("Returned to QC for re-inspection"); load(); }
     catch (e) { toast.error(typeof e.response?.data?.detail === "string" ? e.response.data.detail : "Check entered values and try again"); }
+  };
+
+  const closeRejected = async () => {
+    try {
+      const result = await api.post(`/plans/${id}/close-rejected`, { remarks: closeRejectedRemarks || null });
+      toast.success(`${result.rejected_qty} pair(s) closed as rejected. Passed stock is ready for dispatch.`);
+      setCloseRejectedOpen(false); setCloseRejectedRemarks(""); load();
+    } catch (e) { toast.error(typeof e.response?.data?.detail === "string" ? e.response.data.detail : "Could not close rejected pairs"); }
   };
 
   const cancelPlan = async () => {
@@ -142,6 +179,23 @@ export default function PlanDetail() {
       load();
     } catch (e) { toast.error(typeof e.response?.data?.detail === "string" ? e.response.data.detail : "Check entered values and try again"); }
   };
+
+  const qcResolutionActions = () => (
+    <>
+      <Button onClick={reworkReturn} data-testid="btn-rework-return">Reinspect QC</Button>
+      <Dialog open={closeRejectedOpen} onOpenChange={setCloseRejectedOpen}>
+        <DialogTrigger asChild><Button variant="outline" data-testid="btn-close-rejected">Reject Outstanding & Dispatch</Button></DialogTrigger>
+        <DialogContent aria-describedby={undefined}>
+          <DialogHeader><DialogTitle>Close outstanding QC pairs as rejected?</DialogTitle></DialogHeader>
+          <div className="space-y-3 py-2">
+            <p className="text-sm text-slate-600">The QC-passed pairs remain in finished stock and can be dispatched. Outstanding rework or held pairs will be recorded as rejected and will not be dispatched.</p>
+            <Textarea placeholder="Reason for rejection (optional)" value={closeRejectedRemarks} onChange={(e) => setCloseRejectedRemarks(e.target.value)} data-testid="close-rejected-remarks" />
+          </div>
+          <DialogFooter><Button onClick={closeRejected} data-testid="confirm-close-rejected">Confirm Rejection</Button></DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </>
+  );
 
   const actionButton = () => {
     switch (plan.status) {
@@ -219,27 +273,30 @@ export default function PlanDetail() {
 
                 <div>
                   <div className="font-semibold mb-2">Size-wise Good / Rework / Reject</div>
+                  <p className="text-xs text-slate-500 mb-2">Returned quantity comes from the packing matrix. Enter only Rework or Reject; Good is calculated automatically.</p>
                   <table className="data-table w-full">
-                    <thead><tr><th>Size</th><th>Plan Qty</th><th>Good</th><th>Rework</th><th>Reject</th></tr></thead>
+                    <thead><tr><th>Size</th><th>Plan Qty</th><th>Returned</th><th>Good (calculated)</th><th>Rework</th><th>Reject</th></tr></thead>
                     <tbody>
-                      {sizeResults.map((sr) => {
+                      {calculatedSizeResults.map((sr) => {
                         const planQty = plan.sizes_snapshot.find((s) => s.size === sr.size)?.pairs || 0;
                         return (
                           <tr key={sr.size}>
                             <td className="font-mono">{sr.size}</td>
                             <td>{planQty}</td>
-                            <td><Input type="number" min="0" value={sr.good} onChange={(e) => updSR(sr.size, "good", e.target.value)} className="w-20" data-testid={`sr-${sr.size}-good`} /></td>
-                            <td><Input type="number" min="0" value={sr.rework} onChange={(e) => updSR(sr.size, "rework", e.target.value)} className="w-20" /></td>
-                            <td><Input type="number" min="0" value={sr.reject} onChange={(e) => updSR(sr.size, "reject", e.target.value)} className="w-20" /></td>
+                            <td className="font-mono">{sr.returned}</td>
+                            <td className={`font-mono font-semibold ${sr.good < 0 ? "text-red-700" : ""}`} data-testid={`sr-${sr.size}-good`}>{Math.max(0, sr.good)}</td>
+                            <td><Input type="number" min="0" max={sr.returned} value={sr.rework} onChange={(e) => updReturnException(sr.size, "rework", e.target.value)} className="w-20" data-testid={`sr-${sr.size}-rework`} /></td>
+                            <td><Input type="number" min="0" max={sr.returned} value={sr.reject} onChange={(e) => updReturnException(sr.size, "reject", e.target.value)} className="w-20" data-testid={`sr-${sr.size}-reject`} /></td>
                           </tr>
                         );
                       })}
                     </tbody>
                   </table>
+                  {returnAllocationError && <div role="alert" className="text-red-700 text-sm mt-2">Size {returnAllocationError.size}: Rework + Reject cannot exceed Returned.</div>}
                 </div>
                 <Textarea placeholder="Remarks" value={retRemarks} onChange={(e) => setRetRemarks(e.target.value)} />
               </div>
-              <DialogFooter><Button onClick={submitReturn} disabled={!packing || !!packingError || !bags.length} data-testid="confirm-return">Save Return</Button></DialogFooter>
+              <DialogFooter><Button onClick={submitReturn} disabled={!packing || !!packingError || !!returnAllocationError || !bags.length} data-testid="confirm-return">Save Return</Button></DialogFooter>
             </DialogContent>
           </Dialog>
         </>;
@@ -251,14 +308,12 @@ export default function PlanDetail() {
           <DialogContent aria-describedby={undefined} className="max-w-3xl">
             <DialogHeader><DialogTitle>QC - {plan.plan_no}</DialogTitle></DialogHeader>
             <div className="py-2 max-h-[70vh] overflow-auto space-y-3">
-              <div className="flex gap-6 text-sm"><span data-testid="qc-form-number">QC No.: {plan.qc_no}</span><span data-testid="qc-form-date">Date: {plan.qc_date ? new Date(plan.qc_date).toLocaleDateString() : "-"}</span></div>
+              <div className="flex gap-6 text-sm"><span data-testid="qc-form-number">Plan No.: {plan.plan_no}</span><span data-testid="qc-form-date">Date: {plan.qc_date ? new Date(plan.qc_date).toLocaleDateString() : "-"}</span></div>
               <table className="data-table w-full">
                 <thead><tr><th>Size</th><th>Returned</th><th>Pass</th><th>Rework</th><th>Hold</th></tr></thead>
                 <tbody>
                   {qc.size_results.map((sr) => {
-                    const ret = plan.returns[plan.returns.length - 1];
-                    const retSize = ret?.size_results?.find((s) => s.size === sr.size);
-                    const returned = retSize ? (retSize.good || 0) + (retSize.rework || 0) : 0;
+                    const returned = qcReceivedQty(sr.size);
                     return (
                       <tr key={sr.size}>
                         <td className="font-mono">{sr.size}</td>
@@ -271,18 +326,21 @@ export default function PlanDetail() {
                   })}
                 </tbody>
               </table>
+              {qcEntryError && <div role="alert" className="text-red-700 text-sm">Size {qcEntryError.size}: Pass + Rework + Hold must equal Received ({qcReceivedQty(qcEntryError.size)}).</div>}
               <div>
                 <Label>Defects (comma separated)</Label>
                 <Input value={qc.defects.join(",")} onChange={(e) => setQc({ ...qc, defects: e.target.value.split(",").map((s) => s.trim()).filter(Boolean) })} />
               </div>
               <Textarea placeholder="Remarks" value={qc.remarks} onChange={(e) => setQc({ ...qc, remarks: e.target.value })} />
             </div>
-            <DialogFooter><Button onClick={submitQC} data-testid="confirm-qc">Save QC</Button></DialogFooter>
+            <DialogFooter><Button onClick={submitQC} disabled={!!qcEntryError} data-testid="confirm-qc">Save QC</Button></DialogFooter>
           </DialogContent>
         </Dialog>
         </>;
       case "REWORK":
-        return <Button onClick={reworkReturn} data-testid="btn-rework-return">Return to QC</Button>;
+        return qcResolutionActions();
+      case "HOLD":
+        return qcResolutionActions();
       case "FINISHED":
         return <Link to="/dispatch/new"><Button data-testid="btn-goto-dispatch">Dispatch</Button></Link>;
       default:
@@ -367,7 +425,7 @@ export default function PlanDetail() {
           <div className="flex justify-between items-center mb-2"><div className="font-display font-semibold">Stitching Returns</div><a href={`/print/stitching/${plan.id}`} target="_blank" rel="noreferrer" className="text-blue-600 text-sm" data-testid="print-stitching-return"><Printer size={14} className="inline mr-1" />Print Packing List</a></div>
           {plan.returns.map((r) => (
             <div key={r.id} className="mb-3" data-testid={`saved-return-${r.id}`}>
-              <div className="text-sm"><span className="font-mono">{r.return_no}</span> · {new Date(r.return_date).toLocaleDateString()}</div>
+              <div className="text-sm"><span className="font-mono">{plan.plan_no}</span> · {new Date(r.return_date).toLocaleDateString()}</div>
               <table className="data-table w-full mt-1" data-testid={`saved-packing-table-${r.id}`}>
                 <thead><tr><th>S. No.</th>{plan.sizes_snapshot.map((s) => <th key={s.size}>{s.size}</th>)}<th>Total</th><th>Status</th></tr></thead>
                 <tbody>{r.bags.map((b, i) => (
@@ -386,7 +444,7 @@ export default function PlanDetail() {
           <div className="font-display font-semibold mb-2">QC Records</div>
           {plan.qc_records.map((q) => (
             <div key={q.id} className="text-sm mb-2 flex items-center justify-between border-b py-1">
-              <div><span className="font-mono">{q.qc_no}</span> · {new Date(q.inspection_date).toLocaleString()} · Pass: {q.total_pass} · Rework: {q.total_rework} · Hold: {q.total_hold}</div>
+              <div><span className="font-mono">{plan.plan_no}</span> · {new Date(q.inspection_date).toLocaleString()} · Pass: {q.total_pass} · Rework: {q.total_rework} · Hold: {q.total_hold}</div>
               <a href={`/print/qc/${q.id}`} target="_blank" rel="noreferrer" className="text-blue-600 text-xs"><Printer size={12} className="inline mr-1" />Print</a>
             </div>
           ))}

@@ -35,7 +35,6 @@ export default function PrintCutting() {
           <div><span className="lbl">CO No.</span><span className="val">{plan.co_no}</span></div>
           <div><span className="lbl">Plan No.</span><span className="val">{plan.plan_no}</span></div>
           <div><span className="lbl">Date</span><span className="val">{new Date(plan.plan_date).toLocaleDateString()}</span></div>
-          <div><span className="lbl">Cutting No.</span><span className="val">{plan.cutting_no || "-"}</span></div>
           <div><span className="lbl">Article</span><span className="val">{article?.code} — {article?.name}</span></div>
           <div><span className="lbl">Colour</span><span className="val">{colour?.name}</span></div>
           <div><span className="lbl">Configuration</span><span className="val">{plan.plan_config_name}</span></div>

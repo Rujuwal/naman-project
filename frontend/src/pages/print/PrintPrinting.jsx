@@ -26,7 +26,6 @@ export default function PrintPrinting() {
       <div className="print-page" data-testid="print-slip-container">
         <PrintHeader title="Printing Order" subtitle="Production Work Slip" />
         <div className="doc-meta">
-          <div><span className="lbl">Printing No.</span><span className="val">{plan.printing_no || "-"}</span></div>
           <div><span className="lbl">Plan No.</span><span className="val">{plan.plan_no}</span></div>
           <div><span className="lbl">Issue Date</span><span className="val">{plan.printing_started_at ? new Date(plan.printing_started_at).toLocaleDateString() : "-"}</span></div>
           <div><span className="lbl">Issue Time</span><span className="val">{plan.printing_started_at ? new Date(plan.printing_started_at).toLocaleTimeString() : "-"}</span></div>

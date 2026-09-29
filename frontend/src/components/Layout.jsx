@@ -1,6 +1,6 @@
 import React, { useState } from "react";
 import { NavLink, Outlet, useNavigate } from "react-router-dom";
-import { LayoutDashboard, ShoppingCart, Factory, Boxes, Truck, Users, BarChart3, Database, Settings, Menu, Search } from "lucide-react";
+import { LayoutDashboard, ShoppingCart, Factory, Boxes, Truck, Users, BarChart3, Database, WalletCards, Menu, Search } from "lucide-react";
 import { Input } from "@/components/ui/input";
 
 const nav = [
@@ -11,6 +11,7 @@ const nav = [
   { to: "/dispatch", label: "Dispatch", icon: Truck },
   { to: "/fabricators", label: "Fabricators", icon: Users },
   { to: "/reports", label: "Reports", icon: BarChart3 },
+  { to: "/accounts", label: "Accounts", icon: WalletCards },
   { to: "/masters", label: "Masters", icon: Database },
 ];
 

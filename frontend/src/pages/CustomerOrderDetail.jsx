@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogTrigger } from "@/components/ui/dialog";
 import { toast } from "sonner";
+import { customerOrderStatus } from "@/lib/orderStatus";
 
 export default function CustomerOrderDetail() {
   const { id } = useParams();
@@ -26,6 +27,7 @@ export default function CustomerOrderDetail() {
 
   if (!data) return <div>Loading...</div>;
   const o = data.order;
+  const orderStatus = customerOrderStatus(o, data.plans);
   const cName = (id) => customers.find((c) => c.id === id)?.name || "-";
   const aName = (id) => articles.find((a) => a.id === id)?.name || "-";
   const colName = (id) => colours.find((c) => c.id === id)?.name || "-";
@@ -46,14 +48,15 @@ export default function CustomerOrderDetail() {
 
   return (
     <div data-testid="order-detail-page">
-      <PageHeader title={o.co_no} subtitle={cName(o.customer_id)} />
+      <PageHeader title={o.co_no} subtitle={cName(o.customer_id)}
+        actions={<Link to={`/dispatch/new?customer_id=${o.customer_id}&order_id=${o.id}`}><Button data-testid="dispatch-customer-order">Dispatch This Order</Button></Link>} />
 
       <Card className="p-4 mb-6">
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
           <div><div className="text-slate-500 text-xs uppercase">Order Date</div><div>{new Date(o.order_date).toLocaleDateString()}</div></div>
           <div><div className="text-slate-500 text-xs uppercase">Delivery</div><div>{o.delivery_date ? new Date(o.delivery_date).toLocaleDateString() : "-"}</div></div>
           <div><div className="text-slate-500 text-xs uppercase">Priority</div><div>{o.priority}</div></div>
-          <div><div className="text-slate-500 text-xs uppercase">Status</div><div><StatusBadge status={o.status} /></div></div>
+          <div><div className="text-slate-500 text-xs uppercase">Status</div><div><StatusBadge status={orderStatus} /></div></div>
           <div><div className="text-slate-500 text-xs uppercase">Customer PO</div><div>{o.customer_po || "-"}</div></div>
           <div><div className="text-slate-500 text-xs uppercase">Total Plans</div><div className="font-mono font-semibold">{o.total_plans}</div></div>
           <div><div className="text-slate-500 text-xs uppercase">Total Qty</div><div className="font-mono font-semibold">{o.total_qty}</div></div>

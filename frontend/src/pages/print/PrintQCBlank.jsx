@@ -34,14 +34,12 @@ export default function PrintQCBlank() {
       <div className="print-page" data-testid="print-slip-container">
         <PrintHeader title="QC Inspection Slip" subtitle="Blank — fill on inspection" />
         <div className="doc-meta">
-          <div><span className="lbl">QC No.</span><span className="val" data-testid="print-qc-number">{plan.qc_no || "Not yet assigned"}</span></div>
           <div><span className="lbl">Plan No.</span><span className="val" data-testid="print-plan-number">{plan.plan_no}</span></div>
           <div><span className="lbl">Date</span><span className="val" data-testid="print-qc-date">{plan.qc_date ? new Date(plan.qc_date).toLocaleDateString() : "-"}</span></div>
           <div><span className="lbl">Fabricator</span><span className="val">{plan.fabricator_name || "-"}</span></div>
           <div><span className="lbl">Article</span><span className="val">{article?.code} — {article?.name}</span></div>
           <div><span className="lbl">Colour</span><span className="val">{colour?.name}</span></div>
           <div><span className="lbl">Configuration</span><span className="val">{plan.plan_config_name}</span></div>
-          <div><span className="lbl">Return Ref</span><span className="val">{ret?.return_no || "-"}</span></div>
         </div>
 
         <div className="section-title">Size-wise Inspection</div>

@@ -13,23 +13,40 @@ export default function Dashboard() {
 
   if (!data) return <div>Loading...</div>;
   const s = data.stats;
+  const c = data.command_center || {};
 
   return (
     <div data-testid="dashboard-page">
-      <PageHeader title="Factory Control Room" subtitle="Real-time operations overview" />
+      <PageHeader title="Command Center" subtitle="Factory health at a glance" />
 
-      <div className="grid grid-cols-2 md:grid-cols-5 gap-3 mb-6">
-        <StatCard label="Customer Orders" value={s.customer_orders} />
-        <StatCard label="Active Plans" value={s.active_plans} />
-        <StatCard label="Cutting Pending" value={s.cutting_pending} />
-        <StatCard label="Printing Pending" value={s.printing_pending} />
-        <StatCard label="Stitching Outside" value={s.stitching_outside} />
-        <StatCard label="Stitching Return Pending" value={s.stitching_return_pending} />
-        <StatCard label="QC Pending" value={s.qc_pending} />
-        <StatCard label="Rework Pending" value={s.rework_pending} />
-        <StatCard label="Finished Stock" value={s.finished_stock} />
-        <StatCard label="Dispatch Pending" value={s.dispatch_pending} />
+      <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-3 mb-6" data-testid="command-center-metrics">
+        <StatCard label="Today's Production" value={c.today_production ?? 0} />
+        <StatCard label="Today's Dispatch" value={c.today_dispatch ?? 0} />
+        <StatCard label="Pending Orders" value={c.pending_orders ?? 0} />
+        <StatCard label="WIP (Pairs)" value={c.wip_pairs ?? 0} />
+        <StatCard label="Bottleneck" value={c.bottleneck?.plans ? `${c.bottleneck.stage} (${c.bottleneck.plans})` : "—"} />
+        <StatCard label="Overdue Plans" value={c.overdue_plans ?? 0} />
+        <StatCard label="Material Shortages" value={c.material_shortages ?? 0} />
+        <StatCard label="QC Pending" value={c.qc_pending ?? 0} />
+        <StatCard label="Machine Downtime" value={c.machine_downtime_minutes == null ? "—" : `${c.machine_downtime_minutes}m`} />
+        <StatCard label="Production Efficiency" value={c.production_efficiency == null ? "—" : `${c.production_efficiency}%`} />
+        <StatCard label="Cost / Pair" value={c.cost_per_pair == null ? "—" : c.cost_per_pair} />
+        <StatCard label="On-time Delivery" value={c.on_time_delivery == null ? "—" : `${c.on_time_delivery}%`} />
       </div>
+
+      <Card className="p-4 mb-6 border-amber-300 bg-amber-50" data-testid="action-required">
+        <div className="font-display font-semibold text-amber-950 mb-1">Action Required</div>
+        <p className="text-sm text-amber-900 mb-3">Items that need management attention now.</p>
+        {data.action_required?.length === 0 && <div className="text-sm text-slate-600">No critical actions at this time.</div>}
+        <div className="space-y-2">
+          {(data.action_required || []).map((action, index) => {
+            const content = <><span className={`inline-block w-2 h-2 rounded-full mr-2 ${action.severity === "critical" ? "bg-red-600" : action.severity === "warning" ? "bg-amber-500" : "bg-blue-500"}`} /><span className="font-semibold">{action.title}</span><span className="text-sm text-slate-600 ml-2">{action.detail}</span></>;
+            return action.plan_id
+              ? <Link key={`${action.kind}-${index}`} to={`/production/${action.plan_id}`} className="block rounded bg-white/80 px-3 py-2 hover:bg-white">{content}</Link>
+              : <div key={`${action.kind}-${index}`} className="rounded bg-white/80 px-3 py-2">{content}</div>;
+          })}
+        </div>
+      </Card>
 
       <Card className="p-4 mb-6">
         <div className="font-display font-semibold mb-3">Production Flow</div>

@@ -35,13 +35,22 @@ export default function DispatchNew() {
     return () => { active = false; clearTimeout(timer); };
   }, [customerId, selectedPlans, selectedBags]);
 
-  useEffect(() => { api.get("/customers").then(setCustomers); }, []);
-
   useEffect(() => {
-    if (!customerId) return setPlans([]);
-    api.get(`/customers/${customerId}/ready-plans`).then(setPlans);
-    setSelectedPlans([]); setBags([]); setSelectedBags([]);
-  }, [customerId]);
+    api.get("/customers").then(setCustomers);
+    // Older deployments do not yet expose /ready-plans; combine their
+    // customer-specific ready-plan lists so dispatch remains available.
+    api.get("/ready-plans").catch(async () => {
+      const sourceCustomers = await api.get("/customers");
+      const groups = await Promise.all(sourceCustomers.map((customer) =>
+        api.get(`/customers/${customer.id}/ready-plans`).then((rows) => rows.map((plan) => ({
+          ...plan, source_customer_id: customer.id, source_customer_name: customer.name,
+        })))
+      ));
+      return groups.flat();
+    }).then(setPlans);
+  }, []);
+
+  const selectCustomer = (value) => setCustomerId(value);
 
   const togglePlan = (p) => setSelectedPlans((prev) => prev.some((x) => x.id === p.id) ? prev.filter((x) => x.id !== p.id) : [...prev, p]);
 
@@ -63,6 +72,7 @@ export default function DispatchNew() {
 
   const bagsByPlan = {};
   bags.forEach((b) => { (bagsByPlan[b.plan_id] ||= []).push(b); });
+  const crossCustomerPlans = selectedPlans.filter((plan) => customerId && plan.source_customer_id && plan.source_customer_id !== customerId);
 
   const submit = async () => {
     if (!customerId) return toast.error("Select customer");
@@ -76,32 +86,18 @@ export default function DispatchNew() {
         ...form,
       });
       toast.success(`Dispatch ${r.dispatch_no} created`);
+      if (r.replacement_plan_nos?.length) toast.success(`Replacement plan(s) created for the source customer: ${r.replacement_plan_nos.join(", ")}`);
       nav("/dispatch");
     } catch (e) { toast.error(e.response?.data?.detail || "Failed"); }
   };
 
   return (
     <div data-testid="dispatch-new-page">
-      <PageHeader title="New Dispatch" subtitle="Select customer, ready plans and original packing rows" />
-
-      <Card className="p-4 mb-4">
-        <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-          <div><Label>Customer *</Label>
-            <Select value={customerId} onValueChange={setCustomerId}>
-              <SelectTrigger data-testid="dsp-customer"><SelectValue placeholder="Select customer" /></SelectTrigger>
-              <SelectContent>{customers.map((c) => <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>)}</SelectContent>
-            </Select>
-          </div>
-          <div><Label>Transporter</Label><Input value={form.transporter} onChange={(e) => setForm({ ...form, transporter: e.target.value })} /></div>
-          <div><Label>Vehicle / LR No.</Label><Input value={form.vehicle_lr} onChange={(e) => setForm({ ...form, vehicle_lr: e.target.value })} /></div>
-          <div><Label>Remarks</Label><Input value={form.remarks} onChange={(e) => setForm({ ...form, remarks: e.target.value })} /></div>
-        </div>
-      </Card>
+      <PageHeader title="New Dispatch" subtitle="Select ready plans first, then choose any dispatch recipient and transport details" />
 
       <Card className="p-4 mb-4">
         <div className="font-display font-semibold mb-2">Ready Plans (Finished Stock)</div>
-        {!customerId && <div className="text-slate-500 text-sm">Select a customer to view ready plans.</div>}
-        {customerId && plans.length === 0 && <div className="text-slate-500 text-sm">No plans ready for this customer.</div>}
+        {plans.length === 0 && <div className="text-slate-500 text-sm">No ready plans available for dispatch.</div>}
         <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
           {plans.map((p) => {
             const sel = !!selectedPlans.find((x) => x.id === p.id);
@@ -119,12 +115,29 @@ export default function DispatchNew() {
                 <div className="text-xs mt-1 flex gap-x-3">
                   <span><span className="text-slate-500">Config:</span> {p.plan_config_name}</span>
                   <span><span className="text-slate-500">CO:</span> <span className="font-mono">{p.co_no}</span></span>
+                  <span><span className="text-slate-500">Source Customer:</span> <span className="font-semibold">{p.source_customer_name || "-"}</span></span>
                   {p.customer_po && <span><span className="text-slate-500">PO:</span> <span className="font-mono">{p.customer_po}</span></span>}
                 </div>
               </div>
             );
           })}
         </div>
+      </Card>
+
+      <Card className="p-4 mb-4">
+        <div className="font-display font-semibold mb-2">Dispatch Recipient & Transport</div>
+        <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+          <div><Label>Dispatch To Customer *</Label>
+            <Select value={customerId} onValueChange={selectCustomer}>
+              <SelectTrigger data-testid="dsp-customer"><SelectValue placeholder="Select any customer" /></SelectTrigger>
+              <SelectContent>{customers.map((c) => <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>)}</SelectContent>
+            </Select>
+          </div>
+          <div><Label>Transporter</Label><Input value={form.transporter} onChange={(e) => setForm({ ...form, transporter: e.target.value })} /></div>
+          <div><Label>Vehicle / LR No.</Label><Input value={form.vehicle_lr} onChange={(e) => setForm({ ...form, vehicle_lr: e.target.value })} /></div>
+          <div><Label>Remarks</Label><Input value={form.remarks} onChange={(e) => setForm({ ...form, remarks: e.target.value })} /></div>
+        </div>
+        {crossCustomerPlans.length > 0 && <div className="mt-3 text-sm text-amber-800 bg-amber-50 border border-amber-200 rounded p-2">Cross-customer dispatch: {crossCustomerPlans.length} selected plan(s) will be sent to a different customer. Once fully dispatched, replacement plan(s) will be created under the original Customer Order so the source customer remains pending.</div>}
       </Card>
 
       <Card className="p-4 mb-4">

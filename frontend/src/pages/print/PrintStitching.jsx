@@ -29,7 +29,6 @@ export default function PrintStitching() {
       <div className="print-page" data-testid="print-slip-container">
         <PrintHeader title="Stitching Job Card" subtitle="Fabricator Work Order" />
         <div className="doc-meta">
-          <div><span className="lbl">Stitching No.</span><span className="val">{plan.stitching_no || "-"}</span></div>
           <div><span className="lbl">Plan No.</span><span className="val">{plan.plan_no}</span></div>
           <div><span className="lbl">Fabricator</span><span className="val">{plan.fabricator_name || "-"}</span></div>
           <div><span className="lbl">Issue Date</span><span className="val">{plan.stitching_started_at ? new Date(plan.stitching_started_at).toLocaleDateString() : "-"}</span></div>
