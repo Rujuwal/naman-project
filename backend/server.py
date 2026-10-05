@@ -411,6 +411,26 @@ async def list_materials():
         m["current_stock"] = await _material_stock(m["id"])
     return mats
 
+
+@api.post("/materials/scale-stock")
+async def scale_all_material_stock(inp: StockScaleIn):
+    """One audited, idempotent bulk stock adjustment; never overwrites history."""
+    existing = await db.stock_operations.find_one({"operation_key": inp.operation_key})
+    if existing:
+        return {"ok": True, "already_applied": True, "operation": clean(existing)}
+    adjustments = []
+    async for material in db.materials.find({"active": {"$ne": False}}):
+        current = await _material_stock(material["id"])
+        if current <= 0:
+            continue
+        added = current * (inp.factor - 1)
+        await db.material_transactions.insert_one({"id": new_id(), "material_id": material["id"], "kind": "ADJUSTMENT_IN", "qty": added, "signed_qty": added, "at": now_iso(), "remarks": f"Bulk stock scale to {inp.factor:g}x"})
+        adjustments.append({"material_id": material["id"], "material_name": material["name"], "before": current, "added": added, "after": current + added, "uom": material.get("uom")})
+    operation = {"id": new_id(), "operation_key": inp.operation_key, "factor": inp.factor, "at": now_iso(), "adjustments": adjustments}
+    await db.stock_operations.insert_one(operation)
+    await audit("SCALE_ALL_RM_STOCK", "stock_operation", operation["id"], details={"factor": inp.factor, "materials": len(adjustments)})
+    return {"ok": True, "already_applied": False, "operation": clean(operation)}
+
 @api.post("/materials")
 async def create_material(inp: MaterialIn):
     return await _create("materials", inp.model_dump(), "material")
@@ -1298,6 +1318,11 @@ async def rework_return(id: str, inp: ReworkReturnIn):
 
 class CloseRejectedIn(BaseModel):
     remarks: Optional[str] = None
+
+
+class StockScaleIn(BaseModel):
+    factor: float = Field(default=100, gt=1, le=1000)
+    operation_key: str = "scale-all-materials-100x-v1"
 
 
 class MaterialRateIn(BaseModel):
@@ -2381,7 +2406,7 @@ async def seed(force: bool = False):
                   "customer_orders", "production_plans", "fabricator_jobs", "fabricator_returns",
                   "qc_records", "finished_stock_transactions", "dispatches", "audit_logs",
                   "document_sequences", "account_transactions", "rate_cards", "month_closings", "suppliers",
-                  "expenses", "journal_entries", "chart_of_accounts"]:
+                  "expenses", "journal_entries", "chart_of_accounts", "stock_operations"]:
             await db[c].delete_many({})
     # idempotent seed - only if empty
     if await db.customers.count_documents({}) > 0:
