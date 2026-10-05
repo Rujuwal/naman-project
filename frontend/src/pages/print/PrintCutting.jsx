@@ -27,18 +27,18 @@ export default function PrintCutting() {
   const colour = colours.find((c) => c.id === plan.colour_id);
   const totalBundles = comps.reduce((a, c) => a + (c.bundles?.length || 0), 0);
   const bifurcation = (component) => component.bundles.map((bundle) => {
-    if (bundle.formula) return `${bundle.formula} = ${bundle.total}`;
+    if (bundle.formula) return `${bundle.formula}=${bundle.total}`;
     const sizes = bundle.sizes || [];
     if (!sizes.length) return "—";
     const start = sizes[0].size, end = sizes[sizes.length - 1].size;
     const label = sizes.length === 1 ? `${start}x1` : `${start}x${end}`;
-    return `${label} = ${bundle.total ?? sizes.reduce((sum, s) => sum + (s.qty || 0), 0)}`;
+    return `${label}=${bundle.total ?? sizes.reduce((sum, s) => sum + (s.qty || 0), 0)}`;
   }).join(" / ");
 
   return (
     <div>
       <div className="no-print p-4 bg-slate-100 flex justify-end gap-2"><Button onClick={() => window.print()} data-testid="print-trigger-button"><Printer size={14} className="mr-1" />Print</Button></div>
-      <div className="print-page" data-testid="print-slip-container">
+      <div className="print-page bundle-slip" data-testid="print-slip-container">
         <PrintHeader title="Cutting Order" subtitle="Production Work Slip" />
         <div className="doc-meta">
           <div><span className="lbl">CO No.</span><span className="val">{plan.co_no}</span></div>
@@ -57,11 +57,10 @@ export default function PrintCutting() {
         </table>
 
         <div className="section-title">Component-wise Bundle Configuration</div>
-        <table>
-          <thead><tr><th style={{width: '18%'}}>Article</th><th style={{textAlign: 'left'}}>Bifurcation</th><th style={{width: '15%'}}>Bundle</th><th style={{width: '8%'}}></th></tr></thead>
+        <table className="bundle-config-table">
+          <thead><tr><th style={{width: '22%'}}>Article</th><th style={{width: '62%', textAlign: 'left'}}>Bifurcation</th><th style={{width: '10%'}}>Bundle</th><th style={{width: '6%'}}></th></tr></thead>
           <tbody>
             <tr><td colSpan="4"><strong>{article?.name || plan.plan_config_name}</strong></td></tr>
-            <tr><td colSpan="4">&nbsp;</td></tr>
             {comps.length === 0 && <tr><td colSpan="4">No components configured</td></tr>}
             {comps.map((c) => <tr key={c.id}><td>{c.component}</td><td style={{textAlign: 'left'}}>{bifurcation(c)}</td><td>{c.bundles.length}</td><td style={{fontSize: '22px', lineHeight: 1}}>□</td></tr>)}
           </tbody>

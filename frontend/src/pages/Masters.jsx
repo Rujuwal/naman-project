@@ -47,20 +47,68 @@ function PlanConfigMaster() {
   const [articles, setArticles] = useState([]);
   const [open, setOpen] = useState(false);
   const [editing, setEditing] = useState(null);
-  const empty = { article_id: "", name: "", pairs_per_bag: "", sizes: [{ size: "", pairs: 0, pairs_per_bag: "" }] };
+  const empty = { article_id: "", name: "", pairs_per_bag: "", sizes: [{ size: "", pairs: 0, pairs_per_bag: "" }], component_configs: [] };
   const [form, setForm] = useState(empty);
   const load = () => { api.get("/plan-configs").then(setItems); api.get("/articles").then(setArticles); };
   useEffect(() => { load(); }, []);
   const openNew = () => { setEditing(null); setForm(empty); setOpen(true); };
-  const openEdit = (pc) => { setEditing(pc.id); setForm({ ...pc, pairs_per_bag: pc.pairs_per_bag ?? "" }); setOpen(true); };
+  const openEdit = (pc) => {
+    setEditing(pc.id);
+    setForm({
+      ...pc,
+      pairs_per_bag: pc.pairs_per_bag ?? "",
+      component_configs: (pc.component_configs || []).map((c) => ({
+        component: c.component,
+        bundle_groups: (c.bundles || []).map((b) => (b.sizes || []).map((s) => s.size).join(",")).join(" | "),
+      })),
+    });
+    setOpen(true);
+  };
   const updSize = (i, k, v) => setForm((prev) => ({ ...prev, sizes: prev.sizes.map((s, n) => n === i ? { ...s, [k]: v } : s) }));
+  const updComponent = (i, k, v) => setForm((prev) => ({ ...prev, component_configs: prev.component_configs.map((c, n) => n === i ? { ...c, [k]: v } : c) }));
+  const addComponent = () => setForm((prev) => ({ ...prev, component_configs: [...prev.component_configs, { component: "", bundle_groups: "" }] }));
+  const removeComponent = (i) => setForm((prev) => ({ ...prev, component_configs: prev.component_configs.filter((_, n) => n !== i) }));
+  const buildComponents = () => {
+    const sizeMap = new Map(form.sizes.map((s) => [String(s.size).trim(), Number(s.pairs)]));
+    const sizes = [...sizeMap.keys()];
+    const expandSize = (token) => {
+      const value = token.trim();
+      if (sizeMap.has(value)) return [value];
+      const range = value.split("-").map((v) => v.trim());
+      if (range.length === 2 && sizeMap.has(range[0]) && sizeMap.has(range[1])) {
+        const from = sizes.indexOf(range[0]), to = sizes.indexOf(range[1]);
+        return from <= to ? sizes.slice(from, to + 1) : [];
+      }
+      return [];
+    };
+    const names = new Set();
+    return form.component_configs.map((c) => {
+      const name = c.component.trim();
+      if (!name || names.has(name.toLowerCase())) throw new Error("Each component needs a unique name");
+      names.add(name.toLowerCase());
+      const groups = c.bundle_groups.split("|").map((g) => g.trim()).filter(Boolean);
+      if (!groups.length) throw new Error(`${name} needs bundle size groups`);
+      const used = new Set();
+      const bundles = groups.map((group, index) => {
+        const groupSizes = group.split(",").flatMap(expandSize);
+        if (!groupSizes.length || groupSizes.some((size) => used.has(size))) throw new Error(`${name} has an invalid or repeated size`);
+        groupSizes.forEach((size) => used.add(size));
+        return { bundle_no: `B${index + 1}`, sizes: groupSizes.map((size) => ({ size, qty: sizeMap.get(size) })) };
+      });
+      if (used.size !== sizes.length) throw new Error(`${name} must include every plan size once`);
+      return { component: name, bundles, sequence: names.size, active: true };
+    });
+  };
   const save = async () => {
     if (!form.article_id || !form.name || !form.sizes.length) return toast.error("Fill required fields");
     const positiveInt = (v) => Number.isInteger(Number(v)) && Number(v) > 0;
     if (form.sizes.some((s) => !s.size || !positiveInt(s.pairs) || !positiveInt(s.pairs_per_bag || form.pairs_per_bag))) return toast.error("Each size needs whole positive pairs and a Pairs Per Bag rule");
     if (form.pairs_per_bag !== "" && !positiveInt(form.pairs_per_bag)) return toast.error("Pairs Per Bag must be a positive whole number");
     if (new Set(form.sizes.map((s) => s.size)).size !== form.sizes.length) return toast.error("Sizes must be unique");
-    const payload = { ...form, pairs_per_bag: form.pairs_per_bag === "" ? null : Number(form.pairs_per_bag), sizes: form.sizes.map((s) => ({ ...s, pairs: Number(s.pairs), pairs_per_bag: s.pairs_per_bag ? Number(s.pairs_per_bag) : null })) };
+    let component_configs;
+    try { component_configs = buildComponents(); }
+    catch (e) { return toast.error(e.message || "Check component bundle groups"); }
+    const payload = { ...form, component_configs, pairs_per_bag: form.pairs_per_bag === "" ? null : Number(form.pairs_per_bag), sizes: form.sizes.map((s) => ({ ...s, pairs: Number(s.pairs), pairs_per_bag: s.pairs_per_bag ? Number(s.pairs_per_bag) : null })) };
     try {
       if (editing) await api.put(`/plan-configs/${editing}`, payload);
       else await api.post("/plan-configs", payload);
@@ -74,16 +122,17 @@ function PlanConfigMaster() {
         <Button size="sm" onClick={openNew} data-testid="add-pc"><Plus size={14} className="mr-1" />Add</Button>
       </div>
       <table className="data-table w-full" data-testid="plan-config-table">
-        <thead><tr><th>Article</th><th>Name</th><th>Sizes</th><th>Total Pairs</th><th>Pairs Per Bag</th><th></th></tr></thead>
+        <thead><tr><th>Article</th><th>Name</th><th>Sizes</th><th>Total Pairs</th><th>Pairs Per Bag</th><th>Components / Bundles</th><th></th></tr></thead>
         <tbody>{items.map((it) => <tr key={it.id} data-testid={`config-${it.id}`}>
           <td>{articles.find((a) => a.id === it.article_id)?.code || "-"}</td><td>{it.name}</td>
           <td className="text-xs font-mono">{it.sizes.map((s) => `${s.size}:${s.pairs}`).join(" · ")}</td><td className="font-mono font-semibold">{it.total_pairs}</td>
           <td data-testid={`config-packing-${it.id}`} className="text-xs">{it.sizes.some((s) => s.pairs_per_bag) ? it.sizes.map((s) => `${s.size}: ${s.pairs_per_bag || it.pairs_per_bag || "Not set"}`).join(" · ") : it.pairs_per_bag || "Not configured"}</td>
+          <td className="text-xs">{it.component_configs?.length || 0} / {(it.component_configs || []).reduce((total, c) => total + (c.bundles?.length || 0), 0)}</td>
           <td><Button size="sm" variant="outline" data-testid={`edit-pc-${it.id}`} onClick={() => openEdit(it)}>Edit</Button></td>
         </tr>)}</tbody>
       </table>
       <Dialog open={open} onOpenChange={setOpen}>
-        <DialogContent className="max-w-2xl" aria-describedby={undefined} data-testid="plan-config-dialog">
+        <DialogContent className="max-w-4xl" aria-describedby={undefined} data-testid="plan-config-dialog">
           <DialogHeader><DialogTitle>{editing ? "Edit" : "New"} Plan Configuration</DialogTitle></DialogHeader>
           <div className="space-y-3 py-2 max-h-[70vh] overflow-auto">
             <div><Label>Article</Label><Select value={form.article_id} onValueChange={(v) => setForm((prev) => ({ ...prev, article_id: v }))}><SelectTrigger data-testid="pc-article"><SelectValue placeholder="Select" /></SelectTrigger><SelectContent>{articles.map((a) => <SelectItem key={a.id} value={a.id} data-testid={`pc-article-${a.id}`}>{a.code} - {a.name}</SelectItem>)}</SelectContent></Select></div>
@@ -100,6 +149,16 @@ function PlanConfigMaster() {
               </tr>)}</tbody>
             </table>
             <div className="text-sm font-mono" data-testid="pc-total-pairs">Total: {form.sizes.reduce((a, s) => a + (Number(s.pairs) || 0), 0)}</div>
+            <div className="border-t pt-4 space-y-2">
+              <div className="flex items-center justify-between gap-3"><div><Label>Component Bundle Configuration</Label><p className="text-xs text-slate-500 mt-1">This recipe belongs to this plan configuration and prints on its cutting and stitching slips.</p></div><Button type="button" size="sm" variant="outline" onClick={addComponent}>+ Add Component</Button></div>
+              {form.component_configs.length === 0 && <div className="text-sm text-slate-500 border rounded p-3">No components yet. Add each cutting component and its size-wise bundle groups.</div>}
+              {form.component_configs.map((c, i) => <div key={i} className="grid grid-cols-[minmax(120px,0.8fr)_minmax(220px,2fr)_auto] gap-2 items-end border rounded p-2">
+                <div><Label className="text-xs">Component</Label><Input value={c.component} placeholder="e.g. PP Vamp" onChange={(e) => updComponent(i, "component", e.target.value)} /></div>
+                <div><Label className="text-xs">Size groups (one group = one bundle)</Label><Input value={c.bundle_groups} placeholder="6 | 7 | 8 | 9 | 10   or   6,7,8 | 9,10" onChange={(e) => updComponent(i, "bundle_groups", e.target.value)} /></div>
+                <Button type="button" variant="ghost" size="icon" aria-label={`Remove ${c.component || "component"}`} onClick={() => removeComponent(i)}><Trash2 size={14} /></Button>
+              </div>)}
+              {form.component_configs.length > 0 && <p className="text-xs text-slate-500">Separate bundles with <span className="font-mono">|</span>, sizes with commas. A range such as <span className="font-mono">6-8</span> is accepted. Every size must be included once for each component.</p>}
+            </div>
           </div>
           <DialogFooter><Button onClick={save} data-testid="save-pc">Save</Button></DialogFooter>
         </DialogContent>

@@ -119,11 +119,23 @@ class PlanConfigSize(BaseModel):
     pairs_per_bag: Optional[int] = Field(default=None, gt=0, strict=True)
 
 
+class PlanComponentConfigIn(BaseModel):
+    """The cutting/stitching bundle recipe belonging to one plan configuration."""
+    component: str
+    bundles: List[Dict[str, Any]]
+    sequence: int = 0
+    active: bool = True
+
+
 class PlanConfigIn(BaseModel):
     article_id: str
     name: str
     sizes: List[PlanConfigSize]
     pairs_per_bag: Optional[int] = Field(default=None, gt=0, strict=True)
+    # Bundle recipes are owned by the plan configuration.  They continue to be
+    # mirrored to component_configurations so already-issued plans and older
+    # slips remain compatible.
+    component_configs: Optional[List[PlanComponentConfigIn]] = None
     active: bool = True
 
 
@@ -547,22 +559,91 @@ async def create_worker(inp: WorkerIn):
     return await _create("workers", inp.model_dump(), "worker")
 
 # Plan Configurations
+async def _plan_components(plan_config_id: str) -> List[dict]:
+    return [clean(c) for c in await db.component_configurations.find(
+        {"plan_config_id": plan_config_id, "active": {"$ne": False}}
+    ).sort("sequence", 1).to_list(200)]
+
+
+async def _replace_plan_components(plan_config: dict, components: List[PlanComponentConfigIn]):
+    """Validate and replace the bundle recipe attached to a plan configuration."""
+    size_map = {str(s["size"]): int(s["pairs"]) for s in plan_config.get("sizes", [])}
+    names = [c.component.strip() for c in components]
+    if any(not name for name in names) or len({name.lower() for name in names}) != len(names):
+        raise HTTPException(422, "Each component needs a unique name")
+
+    replacements = []
+    for sequence, component in enumerate(components, 1):
+        if not component.bundles:
+            raise HTTPException(422, f"{component.component} needs at least one bundle group")
+        seen_sizes = set()
+        normalized_bundles = []
+        for bundle_index, bundle in enumerate(component.bundles, 1):
+            entries = bundle.get("sizes") or []
+            if not entries:
+                raise HTTPException(422, f"{component.component}: every bundle needs sizes")
+            normalized_sizes = []
+            for entry in entries:
+                size = str(entry.get("size", "")).strip()
+                qty = entry.get("qty")
+                if size not in size_map or size in seen_sizes:
+                    raise HTTPException(422, f"{component.component}: each plan size must appear once only")
+                try:
+                    is_expected_qty = int(qty) == size_map[size]
+                except (TypeError, ValueError):
+                    is_expected_qty = False
+                if not is_expected_qty:
+                    raise HTTPException(422, f"{component.component}: quantity for size {size} must be {size_map[size]}")
+                seen_sizes.add(size)
+                normalized_sizes.append({"size": size, "qty": size_map[size]})
+            total = sum(s["qty"] for s in normalized_sizes)
+            normalized_bundles.append({
+                "bundle_no": f"B{bundle_index}",
+                "sizes": normalized_sizes,
+                "formula": bundle.get("formula") or None,
+                "total": total,
+            })
+        if seen_sizes != set(size_map):
+            raise HTTPException(422, f"{component.component}: bundle groups must cover every plan size")
+        replacements.append({
+            "id": new_id(), "article_id": plan_config["article_id"], "plan_config_id": plan_config["id"],
+            "component": component.component.strip(), "bundles": normalized_bundles,
+            "sequence": sequence, "active": component.active, "created_at": now_iso(),
+        })
+
+    await db.component_configurations.delete_many({"plan_config_id": plan_config["id"]})
+    if replacements:
+        await db.component_configurations.insert_many(replacements)
+    return [clean(c) for c in replacements]
+
+
 @api.get("/plan-configs")
 async def list_plan_configs(article_id: Optional[str] = None):
     q = {"article_id": article_id} if article_id else {}
     pcs = await _list("plan_configurations", q)
     for pc in pcs:
         pc["total_pairs"] = sum(s["pairs"] for s in pc["sizes"])
+        pc["component_configs"] = await _plan_components(pc["id"])
     return pcs
 
 @api.post("/plan-configs")
 async def create_plan_config(inp: PlanConfigIn):
-    d = inp.model_dump()
-    return await _create("plan_configurations", d, "plan_config")
+    components = inp.component_configs
+    created = await _create("plan_configurations", inp.model_dump(exclude={"component_configs"}), "plan_config")
+    if components is not None:
+        created["component_configs"] = await _replace_plan_components(created, components)
+    return created
 
 @api.put("/plan-configs/{id}")
 async def update_plan_config(id: str, inp: PlanConfigIn):
-    return await _update("plan_configurations", id, inp.model_dump(), "plan_config")
+    components_were_sent = "component_configs" in inp.model_fields_set
+    components = inp.component_configs
+    updated = await _update("plan_configurations", id, inp.model_dump(exclude={"component_configs"}), "plan_config")
+    if components_were_sent and components is not None:
+        updated["component_configs"] = await _replace_plan_components(updated, components)
+    else:
+        updated["component_configs"] = await _plan_components(id)
+    return updated
 
 # Component Configurations
 @api.get("/component-configs")

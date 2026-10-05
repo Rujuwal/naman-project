@@ -29,18 +29,18 @@ export default function PrintStitching() {
   const ret = plan.returns?.[plan.returns.length - 1];
   const rows = ret ? ret.bags : Array.from({ length: 8 }, () => null);
   const bifurcation = (component) => component.bundles.map((bundle) => {
-    if (bundle.formula) return `${bundle.formula} = ${bundle.total}`;
+    if (bundle.formula) return `${bundle.formula}=${bundle.total}`;
     const sizes = bundle.sizes || [];
     if (!sizes.length) return "—";
     const start = sizes[0].size, end = sizes[sizes.length - 1].size;
     const label = sizes.length === 1 ? `${start}x1` : `${start}x${end}`;
-    return `${label} = ${bundle.total ?? sizes.reduce((sum, s) => sum + (s.qty || 0), 0)}`;
+    return `${label}=${bundle.total ?? sizes.reduce((sum, s) => sum + (s.qty || 0), 0)}`;
   }).join(" / ");
 
   return (
     <div>
       <div className="no-print p-4 bg-slate-100 flex justify-end"><Button onClick={() => window.print()} data-testid="print-trigger-button"><Printer size={14} className="mr-1" />Print</Button></div>
-      <div className="print-page" data-testid="print-slip-container">
+      <div className="print-page bundle-slip" data-testid="print-slip-container">
         <PrintHeader title="Stitching Job Card" subtitle="Fabricator Work Order" />
         <div className="doc-meta">
           <div><span className="lbl">Plan No.</span><span className="val">{plan.plan_no}</span></div>
@@ -59,8 +59,8 @@ export default function PrintStitching() {
         </table>
 
         <div className="section-title">Component-wise Bundle Configuration</div>
-        <table>
-          <thead><tr><th style={{width: '18%'}}>Article</th><th style={{textAlign: 'left'}}>Bifurcation</th><th style={{width: '15%'}}>Bundle</th><th style={{width: '8%'}}></th></tr></thead>
+        <table className="bundle-config-table">
+          <thead><tr><th style={{width: '22%'}}>Article</th><th style={{width: '62%', textAlign: 'left'}}>Bifurcation</th><th style={{width: '10%'}}>Bundle</th><th style={{width: '6%'}}></th></tr></thead>
           <tbody><tr><td colSpan="4"><strong>{article?.name || plan.plan_config_name}</strong></td></tr><tr><td colSpan="4">&nbsp;</td></tr>{comps.map((c) => <tr key={c.id}><td>{c.component}</td><td style={{textAlign: 'left'}}>{bifurcation(c)}</td><td>{c.bundles.length}</td><td style={{fontSize: '22px', lineHeight: 1}}>□</td></tr>)}{comps.length === 0 && <tr><td colSpan="4" className="text-center">No component configuration is linked to this plan. Configure the article bundle master before issuing the stitching job.</td></tr>}</tbody>
         </table>
 
