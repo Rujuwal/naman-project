@@ -584,6 +584,37 @@ async def setup_elite_01():
     await audit("SETUP_COMPONENT_CONFIGURATION", "article", article["id"], details={"article": "Elite 01", "component_configs_created": created, "total_bundles": 39})
     return {"ok": True, "article": clean(article), "plan_config": clean(config), "component_configs_created": created, "total_bundles": 39}
 
+
+@api.post("/masters/elite-01/stock-for-20-plans")
+async def setup_elite_01_stock_for_20_plans():
+    """Create the approved Elite 01 BOM and opening RM stock for 20 x 480-pair plans."""
+    await setup_elite_01()
+    article = await db.articles.find_one({"code": "ELITE-01"})
+    requirement = {
+        "PP Vamp": 20, "PP Haddi": 32, "Pingpong": 9.5, "Stiffner": 7, "Foam": 7,
+        "Skinfit Collar": 30, "Skinfit Tounge": 7, "Size Label": 480, "Chidiya": 3,
+        "Tounge": 9, "Vamp": 6.75, "Haddi": 20.5, "Toe": 17.4, "U": 6,
+        "Counter": 9.5, "Center Patti": 15, "Counter Patti": 4, "Toe Patti": 5,
+    }
+    pairs_for_20_plans = 20 * 480
+    lines = []
+    added_stock = 0
+    for name, qty in requirement.items():
+        material = await db.materials.find_one({"name": name})
+        if not material:
+            material = {"id": new_id(), "name": name, "code": "".join(c for c in name.upper() if c.isalnum())[:12], "uom": "units", "current_rate": 0, "cost_method": "Weighted Average", "reorder_level": 0, "active": True, "created_at": now_iso()}
+            await db.materials.insert_one(material)
+        lines.append({"material_id": material["id"], "consumption_per_pair": qty / pairs_for_20_plans, "uom": material.get("uom", "units")})
+        marker = "Elite 01 opening stock for 20 plans"
+        if not await db.material_transactions.find_one({"material_id": material["id"], "remarks": marker}):
+            await db.material_transactions.insert_one({"id": new_id(), "material_id": material["id"], "kind": "OPENING", "qty": qty, "signed_qty": qty, "at": now_iso(), "remarks": marker})
+            added_stock += 1
+    bom = await db.boms.find_one({"article_id": article["id"], "colour_id": None, "active": True})
+    if not bom:
+        await db.boms.insert_one({"id": new_id(), "article_id": article["id"], "colour_id": None, "lines": lines, "version": 1, "active": True, "elite_01_stock_setup": True, "created_at": now_iso()})
+    await audit("SETUP_ELITE_01_RM_STOCK", "article", article["id"], details={"plans": 20, "pairs": pairs_for_20_plans, "materials": len(lines), "new_stock_entries": added_stock})
+    return {"ok": True, "article": "Elite 01", "plans_covered": 20, "pairs_covered": pairs_for_20_plans, "materials": len(lines), "new_stock_entries": added_stock, "uom_note": "Stock was entered as units because no UOM was supplied."}
+
 # BOMs
 @api.get("/boms")
 async def list_boms(article_id: Optional[str] = None):
@@ -1866,7 +1897,7 @@ async def dashboard():
     }
 
 
-_ASSISTANT_SYSTEM = """You are the Naman Upper Factory OS agent. Answer factory questions and prepare one fully specified action only when all required data is available. Never claim an action happened: every action requires the user's explicit Confirm click. Reply strictly as JSON: {\"reply\": string, \"proposed_action\": {\"type\": string, \"data\": object}|null}. Supported action types: SETUP_ELITE_01, CREATE_CUSTOMER, CREATE_ARTICLE, CREATE_COLOUR, CREATE_MATERIAL, CREATE_FABRICATOR, CREATE_WORKER, CREATE_SUPPLIER, ACCOUNT_TRANSACTION, EXPENSE, FABRICATOR_RETURN, QC_ENTRY, START_CUTTING, ISSUE_TO_PRINTING, CREATE_DISPATCH. For FABRICATOR_RETURN, include plan_id and return data with complete packing bags and size_results. If anything required is missing, ask a short question instead of proposing an action. For purchase bills, extract supplier_name, invoice_no, invoice_date, line_items (name, qty, rate, amount), tax, freight and total; do not post a purchase automatically."""
+_ASSISTANT_SYSTEM = """You are the Naman Upper Factory OS agent. Answer factory questions and prepare one fully specified action only when all required data is available. Never claim an action happened: every action requires the user's explicit Confirm click. Reply strictly as JSON: {\"reply\": string, \"proposed_action\": {\"type\": string, \"data\": object}|null}. Supported action types: SETUP_ELITE_01, SETUP_ELITE_01_STOCK_20_PLANS, CREATE_CUSTOMER, CREATE_ARTICLE, CREATE_COLOUR, CREATE_MATERIAL, CREATE_FABRICATOR, CREATE_WORKER, CREATE_SUPPLIER, ACCOUNT_TRANSACTION, EXPENSE, FABRICATOR_RETURN, QC_ENTRY, START_CUTTING, ISSUE_TO_PRINTING, CREATE_DISPATCH. For FABRICATOR_RETURN, include plan_id and return data with complete packing bags and size_results. If anything required is missing, ask a short question instead of proposing an action. For purchase bills, extract supplier_name, invoice_no, invoice_date, line_items (name, qty, rate, amount), tax, freight and total; do not post a purchase automatically."""
 
 
 def _openai_response(input_items: list) -> dict:
@@ -1921,6 +1952,7 @@ async def assistant_confirm(inp: AssistantConfirmIn):
     """Single, audited side-effect boundary for every agent proposal."""
     actions = {
         "SETUP_ELITE_01": lambda d: setup_elite_01(),
+        "SETUP_ELITE_01_STOCK_20_PLANS": lambda d: setup_elite_01_stock_for_20_plans(),
         "CREATE_CUSTOMER": lambda d: create_customer(CustomerIn(**d)),
         "CREATE_ARTICLE": lambda d: create_article(ArticleIn(**d)),
         "CREATE_COLOUR": lambda d: create_colour(ColourIn(**d)),
@@ -2514,6 +2546,7 @@ async def install_confirmed_factory_masters():
     # Upsert is idempotent, so deployment never duplicates it.
     try:
         await setup_elite_01()
+        await setup_elite_01_stock_for_20_plans()
     except Exception:
         log.exception("Could not install Elite 01 component configuration at startup")
 
