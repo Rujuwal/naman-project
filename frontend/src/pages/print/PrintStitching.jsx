@@ -26,8 +26,6 @@ export default function PrintStitching() {
   if (!plan) return null;
   const article = articles.find((a) => a.id === plan.article_id);
   const colour = colours.find((c) => c.id === plan.colour_id);
-  const ret = plan.returns?.[plan.returns.length - 1];
-  const rows = ret ? ret.bags : Array.from({ length: 8 }, () => null);
   const bifurcation = (component) => component.bundles.map((bundle) => {
     if (bundle.formula) return `${bundle.formula}=${bundle.total}`;
     const sizes = bundle.sizes || [];
@@ -63,15 +61,6 @@ export default function PrintStitching() {
           <thead><tr><th style={{width: '22%'}}>Article</th><th style={{width: '62%', textAlign: 'left'}}>Bifurcation</th><th style={{width: '10%'}}>Bundle</th><th style={{width: '6%'}}></th></tr></thead>
           <tbody><tr><td colSpan="4"><strong>{article?.name || plan.plan_config_name}</strong></td></tr><tr><td colSpan="4">&nbsp;</td></tr>{comps.map((c) => <tr key={c.id}><td>{c.component}</td><td style={{textAlign: 'left'}}>{bifurcation(c)}</td><td>{c.bundles.length}</td><td style={{fontSize: '22px', lineHeight: 1}}>□</td></tr>)}{comps.length === 0 && <tr><td colSpan="4" className="text-center">No component configuration is linked to this plan. Configure the article bundle master before issuing the stitching job.</td></tr>}</tbody>
         </table>
-
-        <div className="section-title">{ret ? "Stitching Return Packing List" : "Packing / Return (fill on return)"}</div>
-        <table data-testid="stitching-packing-table">
-          <thead><tr><th>S. No.</th>{plan.sizes_snapshot.map((s) => <th key={s.size}>{s.size}</th>)}<th>Total</th>{!ret && <><th>Good</th><th>Rework</th><th>Reject</th></>}</tr></thead>
-          <tbody>{rows.map((row, i) => <tr key={i} data-testid={`stitching-packing-row-${i + 1}`}><td>{i + 1}</td>{plan.sizes_snapshot.map((s) => <td key={s.size}>{row ? row.sizes.find((x) => x.size === s.size)?.qty || 0 : "\u00a0"}</td>)}<td>{row?.total ?? "\u00a0"}</td>{!ret && <><td>&nbsp;</td><td>&nbsp;</td><td>&nbsp;</td></>}</tr>)}
-            {ret && <tr className="total-row"><td>Total</td>{plan.sizes_snapshot.map((s) => <td key={s.size}>{ret.size_totals[s.size]}</td>)}<td>{ret.total_pairs}</td></tr>}
-          </tbody>
-        </table>
-        {ret && <div className="totals-strip"><div><div className="k">Total Bags</div><div className="v" data-testid="stitching-total-bags">{ret.total_bags ?? "Not configured"}</div></div><div><div className="k">Total Pairs</div><div className="v" data-testid="stitching-total-pairs">{ret.total_pairs}</div></div></div>}
 
         <div className="sign-block">
           <div><div className="sign-line">Fabricator Signature</div></div>
