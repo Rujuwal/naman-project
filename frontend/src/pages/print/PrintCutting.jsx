@@ -26,7 +26,14 @@ export default function PrintCutting() {
   const article = articles.find((a) => a.id === plan.article_id);
   const colour = colours.find((c) => c.id === plan.colour_id);
   const totalBundles = comps.reduce((a, c) => a + (c.bundles?.length || 0), 0);
-  const bundleText = (bundle) => (bundle.sizes || []).map((s) => `Size ${s.size}: ${s.qty}`).join(" / ") || bundle.formula || "—";
+  const bifurcation = (component) => component.bundles.map((bundle) => {
+    if (bundle.formula) return `${bundle.formula} = ${bundle.total}`;
+    const sizes = bundle.sizes || [];
+    if (!sizes.length) return "—";
+    const start = sizes[0].size, end = sizes[sizes.length - 1].size;
+    const label = sizes.length === 1 ? `${start}x1` : `${start}x${end}`;
+    return `${label} = ${bundle.total ?? sizes.reduce((sum, s) => sum + (s.qty || 0), 0)}`;
+  }).join(" / ");
 
   return (
     <div>
@@ -51,10 +58,12 @@ export default function PrintCutting() {
 
         <div className="section-title">Component-wise Bundle Configuration</div>
         <table>
-          <thead><tr><th style={{width: '24%'}}>Component</th><th style={{width: '15%'}}>Bundle No.</th><th>Size-wise Bifurcation</th><th style={{width: '15%'}}>Total Pairs</th></tr></thead>
+          <thead><tr><th style={{width: '18%'}}>Article</th><th style={{textAlign: 'left'}}>Bifurcation</th><th style={{width: '15%'}}>Bundle</th><th style={{width: '8%'}}></th></tr></thead>
           <tbody>
+            <tr><td colSpan="4"><strong>{article?.name || plan.plan_config_name}</strong></td></tr>
+            <tr><td colSpan="4">&nbsp;</td></tr>
             {comps.length === 0 && <tr><td colSpan="4">No components configured</td></tr>}
-            {comps.flatMap((c) => c.bundles.map((b, index) => <tr key={`${c.id}-${b.bundle_no}`}><td>{index === 0 ? c.component : ""}</td><td>{b.bundle_no}</td><td style={{textAlign: 'left'}}>{bundleText(b)}</td><td>{b.total ?? (b.sizes || []).reduce((sum, s) => sum + (s.qty || 0), 0)}</td></tr>))}
+            {comps.map((c) => <tr key={c.id}><td>{c.component}</td><td style={{textAlign: 'left'}}>{bifurcation(c)}</td><td>{c.bundles.length}</td><td style={{fontSize: '22px', lineHeight: 1}}>□</td></tr>)}
           </tbody>
         </table>
         <div className="totals-strip"><div><div className="k">Total Bundles</div><div className="v">{totalBundles}</div></div></div>
