@@ -28,11 +28,7 @@ export default function PrintStitching() {
   const colour = colours.find((c) => c.id === plan.colour_id);
   const ret = plan.returns?.[plan.returns.length - 1];
   const rows = ret ? ret.bags : Array.from({ length: 8 }, () => null);
-  const bundleText = (bundle) => {
-    if (bundle.formula) return `${bundle.bundle_no}: ${bundle.formula} = ${bundle.total}`;
-    const sizes = (bundle.sizes || []).map((s) => `${s.size}: ${s.qty}`).join(", ");
-    return `${bundle.bundle_no}: ${sizes}${bundle.total != null ? ` = ${bundle.total}` : ""}`;
-  };
+  const bundleText = (bundle) => (bundle.sizes || []).map((s) => `Size ${s.size}: ${s.qty}`).join(" / ") || bundle.formula || "—";
 
   return (
     <div>
@@ -55,10 +51,10 @@ export default function PrintStitching() {
           <tbody><tr><td>Pairs</td>{plan.sizes_snapshot.map((s) => <td key={s.size}>{s.pairs}</td>)}<td><strong>{plan.qty}</strong></td></tr></tbody>
         </table>
 
-        <div className="section-title">Component / Bundles</div>
+        <div className="section-title">Component-wise Bundle Configuration</div>
         <table>
-          <thead><tr><th style={{width: '25%'}}>Component</th><th>Bundle Formula</th><th style={{width: '15%'}}>Bundles</th></tr></thead>
-          <tbody>{comps.map((c) => <tr key={c.id}><td>{c.component}</td><td style={{textAlign: 'left'}}>{c.bundles.map(bundleText).join(" | ")}</td><td>{c.bundles.length}</td></tr>)}{comps.length === 0 && <tr><td colSpan="3" className="text-center">No component configuration is linked to this plan. Configure the article bundle master before issuing the stitching job.</td></tr>}</tbody>
+          <thead><tr><th style={{width: '24%'}}>Component</th><th style={{width: '15%'}}>Bundle No.</th><th>Size-wise Bifurcation</th><th style={{width: '15%'}}>Total Pairs</th></tr></thead>
+          <tbody>{comps.flatMap((c) => c.bundles.map((b, index) => <tr key={`${c.id}-${b.bundle_no}`}><td>{index === 0 ? c.component : ""}</td><td>{b.bundle_no}</td><td style={{textAlign: 'left'}}>{bundleText(b)}</td><td>{b.total ?? (b.sizes || []).reduce((sum, s) => sum + (s.qty || 0), 0)}</td></tr>))}{comps.length === 0 && <tr><td colSpan="4" className="text-center">No component configuration is linked to this plan. Configure the article bundle master before issuing the stitching job.</td></tr>}</tbody>
         </table>
 
         <div className="section-title">{ret ? "Stitching Return Packing List" : "Packing / Return (fill on return)"}</div>
