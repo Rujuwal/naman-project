@@ -13,7 +13,13 @@ export default function PrintStitching() {
   const [colours, setColours] = useState([]);
 
   useEffect(() => {
-    api.get(`/plans/${planId}`).then((p) => { setPlan(p); api.get(`/component-configs?plan_config_id=${p.plan_config_id}`).then(setComps); });
+    api.get(`/plans/${planId}`).then((p) => {
+      setPlan(p);
+      // New plans carry an issue-time component snapshot.  Keep the separate
+      // lookup only for compatibility with older backend deployments.
+      if (p.component_configs?.length) setComps(p.component_configs);
+      else api.get(`/component-configs?plan_config_id=${p.plan_config_id}`).then(setComps).catch(() => setComps([]));
+    });
     api.get("/articles").then(setArticles);
     api.get("/colours").then(setColours);
   }, [planId]);
@@ -22,6 +28,11 @@ export default function PrintStitching() {
   const colour = colours.find((c) => c.id === plan.colour_id);
   const ret = plan.returns?.[plan.returns.length - 1];
   const rows = ret ? ret.bags : Array.from({ length: 8 }, () => null);
+  const bundleText = (bundle) => {
+    if (bundle.formula) return `${bundle.bundle_no}: ${bundle.formula} = ${bundle.total}`;
+    const sizes = (bundle.sizes || []).map((s) => `${s.size}: ${s.qty}`).join(", ");
+    return `${bundle.bundle_no}: ${sizes}${bundle.total != null ? ` = ${bundle.total}` : ""}`;
+  };
 
   return (
     <div>
@@ -47,7 +58,7 @@ export default function PrintStitching() {
         <div className="section-title">Component / Bundles</div>
         <table>
           <thead><tr><th style={{width: '25%'}}>Component</th><th>Bundle Formula</th><th style={{width: '15%'}}>Bundles</th></tr></thead>
-          <tbody>{comps.map((c) => <tr key={c.id}><td>{c.component}</td><td style={{textAlign: 'left'}}>{c.bundles.map((b) => `${b.bundle_no}: ${b.formula} = ${b.total}`).join(" | ")}</td><td>{c.bundles.length}</td></tr>)}</tbody>
+          <tbody>{comps.map((c) => <tr key={c.id}><td>{c.component}</td><td style={{textAlign: 'left'}}>{c.bundles.map(bundleText).join(" | ")}</td><td>{c.bundles.length}</td></tr>)}{comps.length === 0 && <tr><td colSpan="3" className="text-center">No component configuration is linked to this plan. Configure the article bundle master before issuing the stitching job.</td></tr>}</tbody>
         </table>
 
         <div className="section-title">{ret ? "Stitching Return Packing List" : "Packing / Return (fill on return)"}</div>

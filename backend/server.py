@@ -1,5 +1,5 @@
 """NAMAN UPPER - Upper Manufacturing Control System - Backend"""
-from fastapi import FastAPI, APIRouter, HTTPException
+from fastapi import FastAPI, APIRouter, HTTPException, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
 from pydantic import BaseModel, Field
@@ -10,6 +10,9 @@ from datetime import datetime, timezone, date
 import os
 import uuid
 import logging
+import base64
+import json
+import requests
 from packing import packing_summary
 
 ROOT_DIR = Path(__file__).parent
@@ -314,6 +317,21 @@ class JournalIn(BaseModel):
     lines: List[JournalLineIn]
 
 
+class AssistantHistoryTurn(BaseModel):
+    role: str
+    text: str = Field(min_length=1, max_length=6000)
+
+
+class AssistantChatIn(BaseModel):
+    message: str = Field(min_length=1, max_length=4000)
+    history: List[AssistantHistoryTurn] = Field(default_factory=list, max_length=12)
+
+
+class AssistantConfirmIn(BaseModel):
+    action_type: str
+    data: Dict[str, Any]
+
+
 # ==================== MASTERS (simple CRUD) ====================
 async def _list(col: str, q: Optional[dict] = None):
     return [clean(d) for d in await db[col].find(q or {}).to_list(2000)]
@@ -539,6 +557,32 @@ async def create_component_config(inp: ComponentConfigIn):
 @api.put("/component-configs/{id}")
 async def update_component_config(id: str, inp: ComponentConfigIn):
     return await _update("component_configurations", id, inp.model_dump(), "component_config")
+
+@api.post("/masters/elite-01/setup")
+async def setup_elite_01():
+    """Idempotently install the approved Elite 01, 480-pair component split."""
+    article = await db.articles.find_one({"code": "ELITE-01"})
+    if not article:
+        article = {"id": new_id(), "code": "ELITE-01", "name": "Elite 01", "active": True, "created_at": now_iso()}
+        await db.articles.insert_one(article)
+    config = await db.plan_configurations.find_one({"article_id": article["id"], "name": "Men 6-10 · 480"})
+    sizes = [{"size": "6", "pairs": 60}, {"size": "7", "pairs": 120}, {"size": "8", "pairs": 120}, {"size": "9", "pairs": 120}, {"size": "10", "pairs": 60}]
+    if not config:
+        config = {"id": new_id(), "article_id": article["id"], "name": "Men 6-10 · 480", "sizes": sizes, "active": True, "created_at": now_iso()}
+        await db.plan_configurations.insert_one(config)
+    size_map = {"6": 60, "7": 120, "8": 120, "9": 120, "10": 60}
+    def bundles(groups):
+        return [{"bundle_no": f"B{i + 1}", "sizes": [{"size": s, "qty": size_map[s]} for s in group], "total": sum(size_map[s] for s in group)} for i, group in enumerate(groups)]
+    singles = [["6"], ["7"], ["8"], ["9"], ["10"]]
+    all_sizes = [["6", "7", "8", "9", "10"]]
+    components = [("PP Vamp", singles), ("PP Haddi", singles), ("Pingpong", all_sizes), ("Stiffner", all_sizes), ("Foam", all_sizes), ("Skinfit Collar", [["6", "7", "8"], ["9", "10"]]), ("Skinfit Tounge", all_sizes), ("Size Label", all_sizes), ("Chidiya", all_sizes), ("Tounge", all_sizes), ("Vamp", [["6", "7"], ["8"], ["9", "10"]]), ("Haddi", singles), ("Toe", [["6", "7"], ["8"], ["9", "10"]]), ("U", [["6", "7", "8"], ["9", "10"]]), ("Counter", [["6", "7", "8"], ["9", "10"]]), ("Center Patti", [["6", "7", "8"], ["9", "10"]]), ("Counter Patti", [["6", "7", "8"], ["9", "10"]]), ("Toe Patti", all_sizes)]
+    created = 0
+    for sequence, (name, groups) in enumerate(components, 1):
+        if not await db.component_configurations.find_one({"plan_config_id": config["id"], "component": name}):
+            await db.component_configurations.insert_one({"id": new_id(), "article_id": article["id"], "plan_config_id": config["id"], "component": name, "bundles": bundles(groups), "sequence": sequence, "active": True, "created_at": now_iso()})
+            created += 1
+    await audit("SETUP_COMPONENT_CONFIGURATION", "article", article["id"], details={"article": "Elite 01", "component_configs_created": created, "total_bundles": 39})
+    return {"ok": True, "article": clean(article), "plan_config": clean(config), "component_configs_created": created, "total_bundles": 39}
 
 # BOMs
 @api.get("/boms")
@@ -877,6 +921,9 @@ async def get_plan(id: str):
     p["fabricator_jobs"] = [clean(x) for x in await db.fabricator_jobs.find({"plan_id": id}).to_list(100)]
     p["returns"] = [await return_packing(clean(x), p) for x in await db.fabricator_returns.find({"plan_id": id}).sort("return_date", 1).to_list(100)]
     p["qc_records"] = [clean(x) for x in await db.qc_records.find({"plan_id": id}).sort("inspection_date", 1).to_list(100)]
+    # The stitching slip must always receive the same component details that
+    # were issued with the plan.  Older plans fall back to the active master.
+    p["component_configs"] = p.get("component_configs_snapshot") or [clean(c) for c in await db.component_configurations.find({"plan_config_id": p["plan_config_id"], "active": {"$ne": False}}).sort("sequence", 1).to_list(200)]
     p["packing_rule"] = await plan_packing_rule(p)
     await attach_plan_dates([p])
     return p
@@ -991,6 +1038,7 @@ async def issue_to_fabricator(id: str, inp: IssueFabricatorIn):
     if not fab:
         raise HTTPException(400, "Fabricator not found")
 
+    component_snapshot = [clean(c) for c in await db.component_configurations.find({"plan_config_id": p["plan_config_id"], "active": {"$ne": False}}).sort("sequence", 1).to_list(200)]
     job = {
         "id": new_id(),
         "plan_id": id,
@@ -1002,6 +1050,7 @@ async def issue_to_fabricator(id: str, inp: IssueFabricatorIn):
         "instructions": inp.instructions,
         "qty_given": p["qty"],
         "qty_returned": 0,
+        "component_configs_snapshot": component_snapshot,
         "status": "OUTSIDE",
     }
     await db.fabricator_jobs.insert_one(job)
@@ -1011,6 +1060,7 @@ async def issue_to_fabricator(id: str, inp: IssueFabricatorIn):
         "fabricator_id": inp.fabricator_id,
         "fabricator_name": fab["name"],
         "stitching_started_at": now_iso(),
+        "component_configs_snapshot": component_snapshot,
         "events": ev,
     }})
     await audit("ISSUE_TO_FABRICATOR", "plan", id, details={"fabricator": fab["name"]})
@@ -1816,6 +1866,87 @@ async def dashboard():
     }
 
 
+_ASSISTANT_SYSTEM = """You are the Naman Upper Factory OS agent. Answer factory questions and prepare one fully specified action only when all required data is available. Never claim an action happened: every action requires the user's explicit Confirm click. Reply strictly as JSON: {\"reply\": string, \"proposed_action\": {\"type\": string, \"data\": object}|null}. Supported action types: SETUP_ELITE_01, CREATE_CUSTOMER, CREATE_ARTICLE, CREATE_COLOUR, CREATE_MATERIAL, CREATE_FABRICATOR, CREATE_WORKER, CREATE_SUPPLIER, ACCOUNT_TRANSACTION, EXPENSE, FABRICATOR_RETURN, QC_ENTRY, START_CUTTING, ISSUE_TO_PRINTING, CREATE_DISPATCH. For FABRICATOR_RETURN, include plan_id and return data with complete packing bags and size_results. If anything required is missing, ask a short question instead of proposing an action. For purchase bills, extract supplier_name, invoice_no, invoice_date, line_items (name, qty, rate, amount), tax, freight and total; do not post a purchase automatically."""
+
+
+def _openai_response(input_items: list) -> dict:
+    key = os.getenv("OPENAI_API_KEY")
+    if not key:
+        raise HTTPException(503, "AI assistant is not configured. Add OPENAI_API_KEY to the backend deployment environment.")
+    response = requests.post("https://api.openai.com/v1/responses", headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"}, json={"model": os.getenv("OPENAI_ASSISTANT_MODEL", "gpt-4.1"), "input": [{"role": "system", "content": [{"type": "input_text", "text": _ASSISTANT_SYSTEM}]}, *input_items], "store": False}, timeout=60)
+    if not response.ok:
+        log.error("OpenAI assistant error %s: %s", response.status_code, response.text[:500])
+        raise HTTPException(502, "The AI service could not complete this request")
+    text = response.json().get("output_text", "")
+    try:
+        return json.loads(text.strip().removeprefix("```json").removesuffix("```").strip())
+    except (json.JSONDecodeError, AttributeError):
+        return {"reply": text or "I could not interpret that response.", "proposed_action": None}
+
+
+@api.post("/assistant/chat")
+async def assistant_chat(inp: AssistantChatIn):
+    # Supply a bounded live operating snapshot, so questions are grounded in
+    # this factory's data rather than generic model knowledge.
+    plans = [clean(p) for p in await db.production_plans.find({}).sort("created_at", -1).limit(100).to_list(100)]
+    context = {
+        "dashboard": await dashboard(),
+        "customers": [{"id": c["id"], "name": c["name"]} for c in await db.customers.find({}).to_list(500)],
+        "fabricators": [{"id": f["id"], "name": f["name"]} for f in await db.fabricators.find({}).to_list(500)],
+        "recent_plans": [{"id": p["id"], "plan_no": p.get("plan_no"), "status": p.get("status"), "qty": p.get("qty"), "fabricator": p.get("fabricator_name")} for p in plans],
+    }
+    history = [{"role": "assistant" if t.role == "assistant" else "user", "content": [{"type": "input_text", "text": t.text}]} for t in inp.history[-12:]]
+    result = _openai_response([{"role": "user", "content": [{"type": "input_text", "text": f"Live factory context (use only for this reply): {json.dumps(context, default=str)}"}]}, *history, {"role": "user", "content": [{"type": "input_text", "text": inp.message}]}])
+    await audit("ASSISTANT_CHAT", "assistant", new_id(), details={"has_action": bool(result.get("proposed_action"))})
+    return result
+
+
+@api.post("/assistant/purchase-bill")
+async def assistant_purchase_bill(file: UploadFile = File(...)):
+    data = await file.read()
+    if not data or len(data) > 15 * 1024 * 1024:
+        raise HTTPException(400, "Upload a bill smaller than 15 MB")
+    content_type = file.content_type or "application/octet-stream"
+    if content_type.startswith("image/"):
+        item = {"type": "input_image", "image_url": f"data:{content_type};base64,{base64.b64encode(data).decode()}"}
+    else:
+        item = {"type": "input_file", "filename": file.filename or "purchase-bill", "file_data": f"data:{content_type};base64,{base64.b64encode(data).decode()}", "detail": "high"}
+    result = _openai_response([{"role": "user", "content": [item, {"type": "input_text", "text": "Read this purchase bill and prepare a reviewable purchase-bill draft."}]}])
+    await audit("ASSISTANT_BILL_SCAN", "assistant", new_id(), details={"filename": file.filename})
+    return result
+
+
+@api.post("/assistant/confirm")
+async def assistant_confirm(inp: AssistantConfirmIn):
+    """Single, audited side-effect boundary for every agent proposal."""
+    actions = {
+        "SETUP_ELITE_01": lambda d: setup_elite_01(),
+        "CREATE_CUSTOMER": lambda d: create_customer(CustomerIn(**d)),
+        "CREATE_ARTICLE": lambda d: create_article(ArticleIn(**d)),
+        "CREATE_COLOUR": lambda d: create_colour(ColourIn(**d)),
+        "CREATE_MATERIAL": lambda d: create_material(MaterialIn(**d)),
+        "CREATE_FABRICATOR": lambda d: create_fabricator(FabricatorIn(**d)),
+        "CREATE_WORKER": lambda d: create_worker(WorkerIn(**d)),
+        "CREATE_SUPPLIER": lambda d: create_supplier(SupplierIn(**d)),
+        "ACCOUNT_TRANSACTION": lambda d: create_account_transaction(AccountTransactionIn(**d)),
+        "EXPENSE": lambda d: create_expense(ExpenseIn(**d)),
+        "FABRICATOR_RETURN": lambda d: receive_stitching(d["plan_id"], ReturnIn(**d["return"])),
+        "QC_ENTRY": lambda d: do_qc(d["plan_id"], QCIn(**d["qc"])),
+        "START_CUTTING": lambda d: start_cutting(d["plan_id"]),
+        "ISSUE_TO_PRINTING": lambda d: issue_to_printing(d["plan_id"]),
+        "CREATE_DISPATCH": lambda d: create_dispatch(DispatchIn(**d)),
+    }
+    handler = actions.get(inp.action_type)
+    if not handler:
+        raise HTTPException(400, "This proposed action is not yet supported")
+    try:
+        result = await handler(inp.data)
+    except (KeyError, ValueError) as exc:
+        raise HTTPException(400, f"Incomplete assistant action: {exc}")
+    await audit("ASSISTANT_CONFIRMED", "assistant", new_id(), details={"action_type": inp.action_type})
+    return {"ok": True, "action_type": inp.action_type, "result": result}
+
+
 # ==================== REPORTS ====================
 def _as_date(value: Optional[str]) -> Optional[date]:
     if not value:
@@ -2375,6 +2506,16 @@ async def initialize_packing_metadata():
 
 
 app.include_router(api)
+
+
+@app.on_event("startup")
+async def install_confirmed_factory_masters():
+    # Elite 01 was explicitly approved as a standard factory configuration.
+    # Upsert is idempotent, so deployment never duplicates it.
+    try:
+        await setup_elite_01()
+    except Exception:
+        log.exception("Could not install Elite 01 component configuration at startup")
 
 app.add_middleware(
     CORSMiddleware,

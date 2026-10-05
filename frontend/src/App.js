@@ -16,6 +16,7 @@ import Fabricators from "@/pages/Fabricators";
 import Reports from "@/pages/Reports";
 import Accounts from "@/pages/Accounts";
 import ArticleCosting from "@/pages/ArticleCosting";
+import Assistant from "@/pages/Assistant";
 import Masters from "@/pages/Masters";
 import PrintCutting from "@/pages/print/PrintCutting";
 import PrintPrinting from "@/pages/print/PrintPrinting";
@@ -58,6 +59,7 @@ function App() {
           <Route path="/reports" element={<Reports />} />
           <Route path="/accounts" element={<Accounts />} />
           <Route path="/accounts/article-costing" element={<ArticleCosting />} />
+          <Route path="/assistant" element={<Assistant />} />
           <Route path="/masters" element={<Masters />} />
         </Route>
       </Routes>
