@@ -344,6 +344,10 @@ class AssistantConfirmIn(BaseModel):
     data: Dict[str, Any]
 
 
+class FactoryResetIn(BaseModel):
+    confirmation: str
+
+
 # ==================== MASTERS (simple CRUD) ====================
 async def _list(col: str, q: Optional[dict] = None):
     return [clean(d) for d in await db[col].find(q or {}).to_list(2000)]
@@ -2482,16 +2486,34 @@ async def audit_logs(limit: int = 100):
     return [clean(a) for a in await db.audit_logs.find({}).sort("at", -1).limit(limit).to_list(limit)]
 
 
+FACTORY_DATA_COLLECTIONS = [
+    "customers", "articles", "colours", "uoms", "materials", "material_transactions",
+    "material_cost_history", "fabricators", "workers", "plan_configurations",
+    "component_configurations", "boms", "customer_orders", "production_plans",
+    "fabricator_jobs", "fabricator_returns", "qc_records", "finished_stock_transactions",
+    "dispatches", "audit_logs", "document_sequences", "account_transactions", "rate_cards",
+    "month_closings", "suppliers", "expenses", "journal_entries", "chart_of_accounts",
+    "stock_operations",
+]
+
+
+@api.post("/admin/reset-factory")
+async def reset_factory(inp: FactoryResetIn):
+    """Permanently clear every factory record without re-seeding sample data."""
+    if inp.confirmation != "DELETE ALL FACTORY DATA":
+        raise HTTPException(422, "Type DELETE ALL FACTORY DATA to confirm the reset")
+    deleted = {}
+    for collection in FACTORY_DATA_COLLECTIONS:
+        result = await db[collection].delete_many({})
+        deleted[collection] = result.deleted_count
+    return {"ok": True, "message": "All factory data has been permanently deleted", "deleted": deleted}
+
+
 # ==================== SEED ====================
 @api.post("/seed")
 async def seed(force: bool = False):
     if force:
-        for c in ["customers", "articles", "colours", "uoms", "materials", "material_transactions",
-                  "fabricators", "workers", "plan_configurations", "component_configurations", "boms",
-                  "customer_orders", "production_plans", "fabricator_jobs", "fabricator_returns",
-                  "qc_records", "finished_stock_transactions", "dispatches", "audit_logs",
-                  "document_sequences", "account_transactions", "rate_cards", "month_closings", "suppliers",
-                  "expenses", "journal_entries", "chart_of_accounts", "stock_operations"]:
+        for c in FACTORY_DATA_COLLECTIONS:
             await db[c].delete_many({})
     # idempotent seed - only if empty
     if await db.customers.count_documents({}) > 0:
@@ -2648,17 +2670,6 @@ async def initialize_packing_metadata():
 
 
 app.include_router(api)
-
-
-@app.on_event("startup")
-async def install_confirmed_factory_masters():
-    # Elite 01 was explicitly approved as a standard factory configuration.
-    # Upsert is idempotent, so deployment never duplicates it.
-    try:
-        await setup_elite_01()
-        await setup_elite_01_stock_for_20_plans()
-    except Exception:
-        log.exception("Could not install Elite 01 component configuration at startup")
 
 app.add_middleware(
     CORSMiddleware,
