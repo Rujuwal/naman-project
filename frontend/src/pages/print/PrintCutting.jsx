@@ -15,7 +15,8 @@ export default function PrintCutting() {
   useEffect(() => {
     api.get(`/plans/${planId}`).then((p) => {
       setPlan(p);
-      api.get(`/component-configs?plan_config_id=${p.plan_config_id}`).then(setComps);
+      if (p.component_configs?.length) setComps(p.component_configs);
+      else api.get(`/component-configs?plan_config_id=${p.plan_config_id}`).then(setComps).catch(() => setComps([]));
     });
     api.get("/articles").then(setArticles);
     api.get("/colours").then(setColours);
@@ -25,6 +26,7 @@ export default function PrintCutting() {
   const article = articles.find((a) => a.id === plan.article_id);
   const colour = colours.find((c) => c.id === plan.colour_id);
   const totalBundles = comps.reduce((a, c) => a + (c.bundles?.length || 0), 0);
+  const bundleText = (bundle) => (bundle.sizes || []).map((s) => `Size ${s.size}: ${s.qty}`).join(" / ") || bundle.formula || "—";
 
   return (
     <div>
@@ -47,18 +49,12 @@ export default function PrintCutting() {
           <tbody><tr><td>Pairs</td>{plan.sizes_snapshot.map((s) => <td key={s.size}>{s.pairs}</td>)}<td><strong>{plan.qty}</strong></td></tr></tbody>
         </table>
 
-        <div className="section-title">Component / Bundle Details</div>
+        <div className="section-title">Component-wise Bundle Configuration</div>
         <table>
-          <thead><tr><th style={{width: '25%'}}>Component</th><th>Bundle Formula</th><th style={{width: '15%'}}>Bundles</th></tr></thead>
+          <thead><tr><th style={{width: '24%'}}>Component</th><th style={{width: '15%'}}>Bundle No.</th><th>Size-wise Bifurcation</th><th style={{width: '15%'}}>Total Pairs</th></tr></thead>
           <tbody>
-            {comps.length === 0 && <tr><td colSpan="3">No components configured</td></tr>}
-            {comps.map((c) => (
-              <tr key={c.id}>
-                <td>{c.component}</td>
-                <td style={{textAlign: 'left'}}>{c.bundles.map((b) => `${b.bundle_no}: ${b.formula} = ${b.total}`).join(" | ")}</td>
-                <td>{c.bundles.length}</td>
-              </tr>
-            ))}
+            {comps.length === 0 && <tr><td colSpan="4">No components configured</td></tr>}
+            {comps.flatMap((c) => c.bundles.map((b, index) => <tr key={`${c.id}-${b.bundle_no}`}><td>{index === 0 ? c.component : ""}</td><td>{b.bundle_no}</td><td style={{textAlign: 'left'}}>{bundleText(b)}</td><td>{b.total ?? (b.sizes || []).reduce((sum, s) => sum + (s.qty || 0), 0)}</td></tr>))}
           </tbody>
         </table>
         <div className="totals-strip"><div><div className="k">Total Bundles</div><div className="v">{totalBundles}</div></div></div>
