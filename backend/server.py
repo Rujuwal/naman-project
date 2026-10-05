@@ -581,12 +581,16 @@ async def update_component_config(id: str, inp: ComponentConfigIn):
 @api.post("/masters/elite-01/setup")
 async def setup_elite_01():
     """Idempotently install the approved Elite 01, 480-pair component split."""
-    article = await db.articles.find_one({"code": "ELITE-01"})
+    # Reuse an Elite 01 article/configuration entered earlier by the factory;
+    # do not create a parallel master that existing plans cannot see.
+    article = await db.articles.find_one({"$or": [{"code": "ELITE-01"}, {"name": {"$regex": "^elite 01$", "$options": "i"}}]})
     if not article:
         article = {"id": new_id(), "code": "ELITE-01", "name": "Elite 01", "active": True, "created_at": now_iso()}
         await db.articles.insert_one(article)
-    config = await db.plan_configurations.find_one({"article_id": article["id"], "name": "Men 6-10 · 480"})
     sizes = [{"size": "6", "pairs": 60}, {"size": "7", "pairs": 120}, {"size": "8", "pairs": 120}, {"size": "9", "pairs": 120}, {"size": "10", "pairs": 60}]
+    expected_sizes = {s["size"]: s["pairs"] for s in sizes}
+    configs = [c async for c in db.plan_configurations.find({"article_id": article["id"]})]
+    config = next((c for c in configs if {s["size"]: s["pairs"] for s in c.get("sizes", [])} == expected_sizes), None)
     if not config:
         config = {"id": new_id(), "article_id": article["id"], "name": "Men 6-10 · 480", "sizes": sizes, "active": True, "created_at": now_iso()}
         await db.plan_configurations.insert_one(config)
