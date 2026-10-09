@@ -76,8 +76,8 @@ export default function StockRoom() {
             <tbody>{ledger.map((l) => <tr key={l.id}><td className="font-mono text-xs">{new Date(l.at).toLocaleString()}</td><td>{mName(l.material_id)}</td><td className="text-xs">{l.kind}</td><td className={`font-mono ${l.signed_qty < 0 ? "text-red-600" : "text-green-600"}`}>{l.signed_qty > 0 ? "+" : ""}{l.signed_qty}</td><td className="text-xs">{l.remarks || "-"}</td></tr>)}</tbody></table></Card>
         </TabsContent>
         <TabsContent value="finished">
-          <Card><table className="data-table w-full"><thead><tr><th>Article</th><th>Colour</th><th>Config</th><th>Plan</th><th>Size</th><th>Qty</th></tr></thead>
-            <tbody>{finished.length === 0 && <tr><td colSpan="6" className="text-center text-slate-500 py-4">No finished stock</td></tr>}{finished.map((f, i) => <tr key={i}><td>{f.article_name}</td><td>{f.colour_name}</td><td>{f.plan_config_name}</td><td className="font-mono">{f.plan_no}</td><td className="font-mono">{f.size}</td><td className="font-mono font-semibold">{f.qty}</td></tr>)}</tbody></table></Card>
+          <Card><div className="p-4 text-sm text-slate-500">QC-passed stock ready for dispatch. Each plan appears once; fully dispatched plans are removed automatically.</div><table className="data-table w-full"><thead><tr><th>Article</th><th>Colour</th><th>Config</th><th>Plan</th><th>QC Passed</th><th>Dispatched</th><th>Available</th></tr></thead>
+            <tbody>{finished.length === 0 && <tr><td colSpan="7" className="text-center text-slate-500 py-4">No QC-passed stock awaiting dispatch</td></tr>}{finished.map((f) => <tr key={f.plan_id}><td>{f.article_name}</td><td>{f.colour_name || "-"}</td><td>{f.plan_config_name}</td><td className="font-mono">{f.plan_no}</td><td className="font-mono">{f.qc_passed_qty}</td><td className="font-mono">{f.dispatched_qty}</td><td className="font-mono font-semibold text-emerald-700">{f.available_qty}</td></tr>)}</tbody></table></Card>
         </TabsContent>
       </Tabs>
     </div>

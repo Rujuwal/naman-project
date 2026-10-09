@@ -1449,28 +1449,36 @@ async def close_rejected(id: str, inp: CloseRejectedIn):
 # ==================== FINISHED STOCK ====================
 @api.get("/finished-stock")
 async def finished_stock():
-    """Aggregate finished stock by plan+size, denormalize via plan lookup."""
+    """Return dispatchable QC-passed finished stock, one row per plan."""
     agg = {}
     async for tx in db.finished_stock_transactions.find({}):
         pid = tx.get("plan_id")
-        size = tx.get("size")
-        if not pid or not size:
+        if not pid:
             continue
-        key = (pid, size)
-        agg[key] = agg.get(key, 0) + tx.get("signed_qty", 0)
+        row = agg.setdefault(pid, {"available_qty": 0, "qc_passed_qty": 0, "dispatched_qty": 0})
+        signed = tx.get("signed_qty", 0)
+        row["available_qty"] += signed
+        if tx.get("kind") == "QC_PASS":
+            row["qc_passed_qty"] += signed
+        elif tx.get("kind") == "DISPATCH":
+            row["dispatched_qty"] -= signed
+        elif tx.get("kind") == "DISPATCH_CANCEL":
+            row["dispatched_qty"] -= signed
 
     articles = {a["id"]: a for a in await _list("articles")}
     colours = {c["id"]: c for c in await _list("colours")}
     pcs = {p["id"]: p for p in await _list("plan_configurations")}
     plans_cache = {}
     result = []
-    for (pid, size), qty in agg.items():
-        if qty <= 0:
-            continue
+    for pid, quantities in agg.items():
         plan = plans_cache.get(pid)
         if plan is None:
             plan = await db.production_plans.find_one({"id": pid}) or {}
             plans_cache[pid] = plan
+        # A fully dispatched plan must not remain in Finished Stock. A partial
+        # dispatch keeps one plan row with only its remaining dispatchable qty.
+        if quantities["available_qty"] <= 0 or plan.get("status") == "DISPATCHED":
+            continue
         aid = plan.get("article_id")
         cid = plan.get("colour_id")
         pcid = plan.get("plan_config_id")
@@ -1479,9 +1487,11 @@ async def finished_stock():
             "colour_id": cid, "colour_name": colours.get(cid, {}).get("name") if cid else None,
             "plan_config_id": pcid, "plan_config_name": pcs.get(pcid, {}).get("name"),
             "plan_id": pid, "plan_no": plan.get("plan_no"),
-            "size": size, "qty": qty,
+            "plan_qty": plan.get("qty", 0), "qc_passed_qty": quantities["qc_passed_qty"],
+            "dispatched_qty": quantities["dispatched_qty"], "available_qty": quantities["available_qty"],
+            "status": plan.get("status"),
         })
-    return result
+    return sorted(result, key=lambda row: row.get("plan_no") or "")
 
 
 # ==================== DISPATCH ====================
