@@ -291,6 +291,7 @@ class RateCardIn(BaseModel):
     work_type: str  # CUTTING, PRINTING, STITCHING, QC, PACKING
     rate: float = Field(ge=0)
     effective_from: str
+    article_id: Optional[str] = None
 
 
 class MonthCloseIn(BaseModel):
@@ -2235,9 +2236,15 @@ async def list_journals(month: Optional[str] = None):
     return [clean(x) for x in await db.journal_entries.find({}).sort("journal_date", -1).to_list(5000) if _in_period(x.get("journal_date"), first, last)]
 
 
-async def _applicable_rate(party_id: str, work_type: str, when: str) -> float:
+async def _applicable_rate(party_id: str, work_type: str, when: str, article_id: Optional[str] = None) -> float:
     d = (_as_date(when) or date.today()).isoformat()
-    card = await db.rate_cards.find_one({"party_id": party_id, "work_type": work_type, "effective_from": {"$lte": d}}, sort=[("effective_from", -1)])
+    # Article-specific rates take priority. The fallback keeps older generic
+    # rate cards usable until every article has its own rate configuration.
+    card = None
+    if article_id:
+        card = await db.rate_cards.find_one({"party_id": party_id, "work_type": work_type, "article_id": article_id, "effective_from": {"$lte": d}}, sort=[("effective_from", -1)])
+    if not card:
+        card = await db.rate_cards.find_one({"party_id": party_id, "work_type": work_type, "$or": [{"article_id": {"$exists": False}}, {"article_id": None}], "effective_from": {"$lte": d}}, sort=[("effective_from", -1)])
     return card.get("rate", 0) if card else 0
 
 
@@ -2264,7 +2271,7 @@ async def _production_work_entries(month: Optional[str] = None):
         for work_type, field in [("CUTTING", "cutting_started_at"), ("PRINTING", "printing_started_at")]:
             when = plan.get(field)
             if when and _in_period(when, first, last):
-                rate = await _applicable_rate("FACTORY", work_type, when)
+                rate = await _applicable_rate("FACTORY", work_type, when, plan.get("article_id"))
                 qty = plan.get("qty", 0)
                 rows.append({**common, "process": work_type.title(), "date": when,
                              "party": "Factory", "qty": qty, "rate": rate,
@@ -2278,7 +2285,7 @@ async def _production_work_entries(month: Optional[str] = None):
         article = articles.get(plan.get("article_id"), {})
         colour = colours.get(plan.get("colour_id"), {})
         qty = sum(item.get("good", 0) for item in ret.get("size_results", []))
-        rate = await _applicable_rate(ret.get("fabricator_id", ""), "STITCHING", ret["return_date"])
+        rate = await _applicable_rate(ret.get("fabricator_id", ""), "STITCHING", ret["return_date"], plan.get("article_id"))
         rows.append({"plan_id": plan["id"], "plan_no": plan.get("plan_no"),
                      "article": article.get("code") or article.get("name", "-"),
                      "article_name": article.get("name", "-"), "colour": colour.get("name", "-"),
@@ -2318,7 +2325,8 @@ async def _account_rows(party_id: str, party_type: str, start: date, end: date):
         async for ret in db.fabricator_returns.find({"fabricator_id": party_id}):
             if _in_period(ret.get("return_date"), start, end):
                 good = sum(x.get("good", 0) for x in ret.get("size_results", []))
-                rate = await _applicable_rate(party_id, "STITCHING", ret["return_date"])
+                plan = await db.production_plans.find_one({"id": ret.get("plan_id")})
+                rate = await _applicable_rate(party_id, "STITCHING", ret["return_date"], (plan or {}).get("article_id"))
                 rows.append({"date": ret["return_date"], "type": "WORK_COMPLETED", "reference": ret.get("plan_no"), "qty": good, "rate": rate, "debit": 0, "credit": round(good * rate, 2), "note": "Accepted stitching return"})
     async for tx in db.account_transactions.find({"party_id": party_id, "party_type": party_type}):
         if _in_period(tx.get("transaction_date"), start, end):
@@ -2416,13 +2424,14 @@ async def monthly_cost_analysis(month: Optional[str] = None, start: Optional[str
     cutting_cost = 0.0; printing_cost = 0.0; stitching_cost = 0.0
     async for plan in db.production_plans.find({}):
         if _in_period(plan.get("cutting_started_at"), first, last):
-            cutting_cost += plan.get("qty", 0) * await _applicable_rate("FACTORY", "CUTTING", plan["cutting_started_at"])
+            cutting_cost += plan.get("qty", 0) * await _applicable_rate("FACTORY", "CUTTING", plan["cutting_started_at"], plan.get("article_id"))
         if _in_period(plan.get("printing_started_at"), first, last):
-            printing_cost += plan.get("qty", 0) * await _applicable_rate("FACTORY", "PRINTING", plan["printing_started_at"])
+            printing_cost += plan.get("qty", 0) * await _applicable_rate("FACTORY", "PRINTING", plan["printing_started_at"], plan.get("article_id"))
     async for ret in db.fabricator_returns.find({}):
         if _in_period(ret.get("return_date"), first, last):
             good = sum(x.get("good", 0) for x in ret.get("size_results", []))
-            stitching_cost += good * await _applicable_rate(ret.get("fabricator_id", ""), "STITCHING", ret["return_date"])
+            plan = await db.production_plans.find_one({"id": ret.get("plan_id")})
+            stitching_cost += good * await _applicable_rate(ret.get("fabricator_id", ""), "STITCHING", ret["return_date"], (plan or {}).get("article_id"))
     expense_rows = [clean(x) for x in await db.account_transactions.find({"party_type": "EXPENSE"}).to_list(5000) if _in_period(x.get("transaction_date"), first, last)]
     overhead = sum(x.get("amount", 0) for x in expense_rows)
     heads = {"Materials": material_cost, "Cutting": cutting_cost, "Printing": printing_cost, "Stitching": stitching_cost, "QC/Other": 0, "Packaging": 0, "Fixed Overhead": overhead}
@@ -2484,12 +2493,12 @@ async def article_wise_costing(month: Optional[str] = None, article_id: Optional
         if bom:
             b["standard_material"] += sum(line.get("consumption_per_pair", 0) * materials.get(line.get("material_id"), {}).get("current_rate", 0) for line in bom.get("lines", [])) * good
         if plan.get("cutting_started_at"):
-            b["cutting"] += plan.get("qty", 0) * await _applicable_rate("FACTORY", "CUTTING", plan["cutting_started_at"])
+            b["cutting"] += plan.get("qty", 0) * await _applicable_rate("FACTORY", "CUTTING", plan["cutting_started_at"], plan.get("article_id"))
         if plan.get("printing_started_at"):
-            b["printing"] += plan.get("qty", 0) * await _applicable_rate("FACTORY", "PRINTING", plan["printing_started_at"])
+            b["printing"] += plan.get("qty", 0) * await _applicable_rate("FACTORY", "PRINTING", plan["printing_started_at"], plan.get("article_id"))
         async for ret in db.fabricator_returns.find({"plan_id": plan_id}):
             accepted = sum(r.get("good", 0) for r in ret.get("size_results", []))
-            rate = await _applicable_rate(ret.get("fabricator_id", ""), "STITCHING", ret.get("return_date", now_iso()))
+            rate = await _applicable_rate(ret.get("fabricator_id", ""), "STITCHING", ret.get("return_date", now_iso()), plan.get("article_id"))
             b["stitching"] += accepted * rate
 
     factory_overhead = sum(x.get("amount", 0) for x in await db.account_transactions.find({"party_type": "EXPENSE"}).to_list(5000) if _in_period(x.get("transaction_date"), first, last))
