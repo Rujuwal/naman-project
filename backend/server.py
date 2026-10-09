@@ -546,6 +546,61 @@ async def fabricator_management():
         })
     return result
 
+@api.get("/fabricators/control")
+async def fabricator_control():
+    """Single operational view built from stitching jobs, returns and QC records."""
+    today = datetime.now(timezone.utc).date()
+    fabs = [clean(x) for x in await db.fabricators.find({"active": {"$ne": False}}).to_list(2000)]
+    plans = {p["id"]: clean(p) for p in await db.production_plans.find({}).to_list(5000)}
+    articles = {a["id"]: clean(a) for a in await db.articles.find({}).to_list(2000)}
+    colours = {c["id"]: clean(c) for c in await db.colours.find({}).to_list(2000)}
+    jobs = [clean(x) for x in await db.fabricator_jobs.find({}).to_list(5000)]
+    returns = [clean(x) for x in await db.fabricator_returns.find({}).to_list(5000)]
+    qcs = [clean(x) for x in await db.qc_records.find({}).to_list(5000)]
+    def day(value): return _as_date(value)
+    def plan_info(plan_id):
+        p = plans.get(plan_id, {}); a = articles.get(p.get("article_id"), {}); c = colours.get(p.get("colour_id"), {})
+        return {"plan_id": plan_id, "plan_no": p.get("plan_no", "-"), "article": a.get("name") or a.get("code", "-"), "colour": c.get("name", "-"), "qty": p.get("qty", 0)}
+    result = []
+    for fab in fabs:
+        fid = fab["id"]; fjobs = [j for j in jobs if j.get("fabricator_id") == fid]
+        freturns = [r for r in returns if r.get("fabricator_id") == fid]
+        fqcs = [q for q in qcs if q.get("fabricator_id") == fid or plans.get(q.get("plan_id"), {}).get("fabricator_id") == fid]
+        current = []
+        for job in fjobs:
+            if job.get("status") != "OUTSIDE": continue
+            issued = day(job.get("issue_date")); due = day(job.get("due_date")); days = (today - issued).days if issued else 0
+            current.append({**plan_info(job.get("plan_id")), "issue_date": job.get("issue_date"), "due_date": job.get("due_date"), "days_outside": days, "overdue": bool(due and due < today), "status": "OUT"})
+        qhistory = []
+        defects = {}
+        for qc in fqcs:
+            total = qc.get("total_pass", 0) + qc.get("total_rework", 0) + qc.get("total_hold", 0)
+            score = qc.get("quality_score", round(qc.get("total_pass", 0) / total * 100, 1) if total else 0)
+            result_name = qc.get("qc_result") or ("REWORK REQUIRED" if qc.get("total_rework", 0) else "PASS")
+            for defect in qc.get("defects", []): defects[defect] = defects.get(defect, 0) + 1
+            qhistory.append({**plan_info(qc.get("plan_id")), "date": qc.get("completed_at") or qc.get("inspection_date"), "quantity": qc.get("returned_quantity", total), "qc_score": score, "qc_result": result_name, "defect_count": len(qc.get("defects", [])), "rework_required": qc.get("total_rework", 0) > 0})
+        return_history = []
+        return_days = []; on_time = 0
+        jobs_by_plan = {j.get("plan_id"): j for j in fjobs}
+        for ret in freturns:
+            job = jobs_by_plan.get(ret.get("plan_id"), {}); issued, returned = day(job.get("issue_date")), day(ret.get("return_date")); due = day(job.get("due_date"))
+            taken = (returned - issued).days if issued and returned else None
+            if taken is not None: return_days.append(taken)
+            if due and returned and returned <= due: on_time += 1
+            linked = [q for q in qhistory if q["plan_id"] == ret.get("plan_id")]
+            latest = linked[-1] if linked else {}
+            return_history.append({**plan_info(ret.get("plan_id")), "issue_date": job.get("issue_date"), "return_date": ret.get("return_date"), "quantity": ret.get("total_returned", 0), "time_taken": taken, "qc_result": latest.get("qc_result", "Pending QC"), "qc_score": latest.get("qc_score")})
+        scores = [q["qc_score"] for q in qhistory]; completed_pairs = sum(r["quantity"] for r in return_history)
+        rework_rate = round(sum(1 for q in qhistory if q["rework_required"]) / len(qhistory) * 100, 1) if qhistory else 0
+        on_time_pct = round(on_time / len(return_history) * 100, 1) if return_history else 0
+        quality = round(sum(scores) / len(scores), 1) if scores else None
+        overdue = sum(1 for row in current if row["overdue"])
+        status = "Overdue" if overdue else ("Attention Required" if rework_rate >= 10 or (quality is not None and quality < 85) else ("Active" if current else "Clear"))
+        overall = "Not enough data" if len(qhistory) < 5 else ("Excellent" if quality >= 93 and on_time_pct >= 90 and rework_rate <= 5 else ("Good" if quality >= 85 and on_time_pct >= 75 else "Needs Attention"))
+        result.append({**fab, "current_work": current, "return_history": sorted(return_history, key=lambda x: x.get("return_date") or "", reverse=True), "quality_history": sorted(qhistory, key=lambda x: x.get("date") or "", reverse=True), "defects": defects, "plans_out": len(current), "pairs_out": sum(x["qty"] for x in current), "completed_plans": len(return_history), "completed_pairs": completed_pairs, "returned_this_month": sum(x["quantity"] for x in return_history if (x.get("return_date") or "").startswith(today.strftime("%Y-%m"))), "average_quality": quality, "on_time_return_pct": on_time_pct, "rework_rate": rework_rate, "average_return_days": round(sum(return_days)/len(return_days), 1) if return_days else None, "overdue_plans": overdue, "status": status, "overall": overall})
+    return result
+
+
 @api.post("/fabricators")
 async def create_fabricator(inp: FabricatorIn):
     return await _create("fabricators", inp.model_dump(), "fabricator")
@@ -1302,11 +1357,17 @@ async def do_qc(id: str, inp: QCIn):
         raise HTTPException(400, "Enter QC results for every received size")
 
     ticket = await ensure_qc_ticket(p, ret["id"])
+    inspected_qty = total_pass + total_rework + total_hold
+    quality_score = round((total_pass / inspected_qty) * 100, 1) if inspected_qty else 0
+    qc_result = "REJECT" if total_pass == 0 else ("REWORK REQUIRED" if total_rework > 0 else ("PASS WITH MINOR ISSUE" if total_hold > 0 or inp.defects else "PASS"))
     doc = {
         "id": ticket["id"],
         "plan_id": id,
         "plan_no": p["plan_no"],
         "return_id": ret["id"],
+        "fabricator_id": p.get("fabricator_id"), "fabricator_name": p.get("fabricator_name"),
+        "article_id": p.get("article_id"), "colour_id": p.get("colour_id"),
+        "returned_quantity": inspected_qty,
         "inspection_date": ticket["inspection_date"],
         "completed_at": now_iso(),
         "size_results": [sr.model_dump() for sr in inp.size_results],
@@ -1316,6 +1377,7 @@ async def do_qc(id: str, inp: QCIn):
         "total_pass": total_pass,
         "total_rework": total_rework,
         "total_hold": total_hold,
+        "quality_score": quality_score, "qc_result": qc_result,
     }
     await db.qc_records.insert_one(doc)
 
