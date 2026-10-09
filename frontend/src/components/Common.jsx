@@ -19,9 +19,10 @@ export const Card = ({ children, className = "" }) => (
   <div className={`bg-white rounded-lg border border-slate-200 shadow-sm ${className}`}>{children}</div>
 );
 
-export const StatCard = ({ label, value, tone = "slate" }) => (
+export const StatCard = ({ label, value, subtext, tone = "slate" }) => (
   <div className={`bg-white rounded-lg border border-slate-200 p-4`}>
     <div className="text-xs text-slate-500 uppercase font-semibold tracking-wide">{label}</div>
     <div className={`font-display text-3xl font-bold text-${tone}-900 mt-1`}>{value}</div>
+    {subtext && <div className="text-xs text-slate-500 mt-1">{subtext}</div>}
   </div>
 );

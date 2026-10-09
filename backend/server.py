@@ -2241,6 +2241,72 @@ async def _applicable_rate(party_id: str, work_type: str, when: str) -> float:
     return card.get("rate", 0) if card else 0
 
 
+async def _production_work_entries(month: Optional[str] = None):
+    """Derived monthly work accounts from the real production workflow.
+
+    Cutting and printing use the factory default rate cards. Stitching uses the
+    issuing fabricator's rate card and is counted only on accepted returns.
+    Nothing is posted manually into a second ledger.
+    """
+    first, last = _period_bounds(month, None, None)
+    articles = {a["id"]: a for a in await _list("articles")}
+    colours = {c["id"]: c for c in await _list("colours")}
+    plans = {p["id"]: clean(p) for p in await db.production_plans.find({}).to_list(5000)}
+    rows = []
+    for plan in plans.values():
+        article = articles.get(plan.get("article_id"), {})
+        colour = colours.get(plan.get("colour_id"), {})
+        common = {
+            "plan_id": plan["id"], "plan_no": plan.get("plan_no"),
+            "article": article.get("code") or article.get("name", "-"),
+            "article_name": article.get("name", "-"), "colour": colour.get("name", "-"),
+        }
+        for work_type, field in [("CUTTING", "cutting_started_at"), ("PRINTING", "printing_started_at")]:
+            when = plan.get(field)
+            if when and _in_period(when, first, last):
+                rate = await _applicable_rate("FACTORY", work_type, when)
+                qty = plan.get("qty", 0)
+                rows.append({**common, "process": work_type.title(), "date": when,
+                             "party": "Factory", "qty": qty, "rate": rate,
+                             "amount": round(qty * rate, 2), "source": f"{work_type.title()} started"})
+    async for ret in db.fabricator_returns.find({}):
+        if not _in_period(ret.get("return_date"), first, last):
+            continue
+        plan = plans.get(ret.get("plan_id"))
+        if not plan:
+            continue
+        article = articles.get(plan.get("article_id"), {})
+        colour = colours.get(plan.get("colour_id"), {})
+        qty = sum(item.get("good", 0) for item in ret.get("size_results", []))
+        rate = await _applicable_rate(ret.get("fabricator_id", ""), "STITCHING", ret["return_date"])
+        rows.append({"plan_id": plan["id"], "plan_no": plan.get("plan_no"),
+                     "article": article.get("code") or article.get("name", "-"),
+                     "article_name": article.get("name", "-"), "colour": colour.get("name", "-"),
+                     "process": "Stitching", "date": ret["return_date"],
+                     "party": ret.get("fabricator_name", "Fabricator"), "qty": qty,
+                     "rate": rate, "amount": round(qty * rate, 2), "source": "Accepted stitching return"})
+    totals = {name: {"qty": 0, "amount": 0.0} for name in ("Cutting", "Printing", "Stitching")}
+    for row in rows:
+        totals[row["process"]]["qty"] += row["qty"]
+        totals[row["process"]]["amount"] += row["amount"]
+    for value in totals.values():
+        value["amount"] = round(value["amount"], 2)
+    return first, last, sorted(rows, key=lambda row: row["date"], reverse=True), totals
+
+
+@api.get("/accounts/production-work")
+async def production_work_accounts(month: Optional[str] = None):
+    first, last, rows, totals = await _production_work_entries(month)
+    return {"from": first.isoformat(), "to": last.isoformat(), "rows": rows, "totals": totals,
+            "workflow": [
+                "Set a per-pair rate for Cutting, Printing and each Stitching fabricator.",
+                "Starting Cutting creates the cutting work entry for the plan quantity.",
+                "Issuing to Printing creates the printing work entry for the plan quantity.",
+                "Receiving accepted stitching creates the stitching work entry for good pairs only.",
+                "QC-passed pairs use all three work costs in Article-wise Costing.",
+            ]}
+
+
 async def _account_rows(party_id: str, party_type: str, start: date, end: date):
     """Return immutable derived work/dispatch rows plus posted accounting rows."""
     rows = []
@@ -2347,18 +2413,23 @@ async def monthly_cost_analysis(month: Optional[str] = None, start: Optional[str
     good_pairs = 0
     async for tx in db.finished_stock_transactions.find({"kind": "QC_PASS"}):
         if _in_period(tx.get("at"), first, last): good_pairs += tx.get("qty", 0)
-    stitching_cost = 0.0
+    cutting_cost = 0.0; printing_cost = 0.0; stitching_cost = 0.0
+    async for plan in db.production_plans.find({}):
+        if _in_period(plan.get("cutting_started_at"), first, last):
+            cutting_cost += plan.get("qty", 0) * await _applicable_rate("FACTORY", "CUTTING", plan["cutting_started_at"])
+        if _in_period(plan.get("printing_started_at"), first, last):
+            printing_cost += plan.get("qty", 0) * await _applicable_rate("FACTORY", "PRINTING", plan["printing_started_at"])
     async for ret in db.fabricator_returns.find({}):
         if _in_period(ret.get("return_date"), first, last):
             good = sum(x.get("good", 0) for x in ret.get("size_results", []))
             stitching_cost += good * await _applicable_rate(ret.get("fabricator_id", ""), "STITCHING", ret["return_date"])
     expense_rows = [clean(x) for x in await db.account_transactions.find({"party_type": "EXPENSE"}).to_list(5000) if _in_period(x.get("transaction_date"), first, last)]
     overhead = sum(x.get("amount", 0) for x in expense_rows)
-    heads = {"Materials": material_cost, "Cutting": 0, "Printing": 0, "Stitching": stitching_cost, "QC/Other": 0, "Packaging": 0, "Fixed Overhead": overhead}
+    heads = {"Materials": material_cost, "Cutting": cutting_cost, "Printing": printing_cost, "Stitching": stitching_cost, "QC/Other": 0, "Packaging": 0, "Fixed Overhead": overhead}
     total = sum(heads.values())
     breakdown = [{"head": k, "total": round(v, 2), "cost_per_pair": round(v / good_pairs, 2) if good_pairs else None, "percent": round(v / total * 100, 1) if total else 0} for k, v in heads.items()]
     return {"from": first.isoformat(), "to": last.isoformat(), "good_pairs": good_pairs, "total_pairs_produced": good_pairs, "total_cost": round(total, 2), "cost_per_pair": round(total / good_pairs, 2) if good_pairs else None, "breakdown": breakdown,
-            "data_note": "Cost heads without a historical work rate or transaction are shown as zero; enter rate cards and expense transactions to activate them."}
+            "data_note": "Cutting and printing use the Factory rate cards; stitching uses the fabricator rate active on the return date."}
 
 
 @api.get("/reports/monthly-party-dispatch")
@@ -2402,7 +2473,7 @@ async def article_wise_costing(month: Optional[str] = None, article_id: Optional
     buckets = {}
     for plan_id, good in outputs.items():
         plan = plans[plan_id]; key = (plan.get("article_id"), plan.get("colour_id"))
-        b = buckets.setdefault(key, {"article_id": key[0], "colour_id": key[1], "good_pairs": 0, "material": 0.0, "stitching": 0.0, "standard_material": 0.0, "plans": []})
+        b = buckets.setdefault(key, {"article_id": key[0], "colour_id": key[1], "good_pairs": 0, "material": 0.0, "cutting": 0.0, "printing": 0.0, "stitching": 0.0, "standard_material": 0.0, "plans": []})
         b["good_pairs"] += good; b["plans"].append(plan.get("plan_no"))
         material_total = 0.0
         async for tx in db.material_transactions.find({"plan_id": plan_id, "kind": "MATERIAL_CONSUMPTION"}):
@@ -2412,6 +2483,10 @@ async def article_wise_costing(month: Optional[str] = None, article_id: Optional
         bom = plan.get("bom_snapshot") or await _find_bom(plan["article_id"], plan.get("colour_id"))
         if bom:
             b["standard_material"] += sum(line.get("consumption_per_pair", 0) * materials.get(line.get("material_id"), {}).get("current_rate", 0) for line in bom.get("lines", [])) * good
+        if plan.get("cutting_started_at"):
+            b["cutting"] += plan.get("qty", 0) * await _applicable_rate("FACTORY", "CUTTING", plan["cutting_started_at"])
+        if plan.get("printing_started_at"):
+            b["printing"] += plan.get("qty", 0) * await _applicable_rate("FACTORY", "PRINTING", plan["printing_started_at"])
         async for ret in db.fabricator_returns.find({"plan_id": plan_id}):
             accepted = sum(r.get("good", 0) for r in ret.get("size_results", []))
             rate = await _applicable_rate(ret.get("fabricator_id", ""), "STITCHING", ret.get("return_date", now_iso()))
@@ -2422,13 +2497,13 @@ async def article_wise_costing(month: Optional[str] = None, article_id: Optional
     rows = []
     for b in buckets.values():
         good = b["good_pairs"]; overhead = factory_overhead * good / total_good if total_good else 0
-        total = b["material"] + b["stitching"] + overhead
+        total = b["material"] + b["cutting"] + b["printing"] + b["stitching"] + overhead
         rows.append({"article_id": b["article_id"], "article": articles.get(b["article_id"], {}).get("code", "-"), "colour_id": b["colour_id"], "colour": colours.get(b["colour_id"], {}).get("name", "-"), "good_pairs": good,
-                     "material": round(b["material"] / good, 2) if good else 0, "cutting": 0, "printing": 0, "stitching": round(b["stitching"] / good, 2) if good else 0, "packaging": 0,
+                     "material": round(b["material"] / good, 2) if good else 0, "cutting": round(b["cutting"] / good, 2) if good else 0, "printing": round(b["printing"] / good, 2) if good else 0, "stitching": round(b["stitching"] / good, 2) if good else 0, "packaging": 0,
                      "factory_overhead": round(overhead / good, 2) if good else 0, "actual_cost_per_pair": round(total / good, 2) if good else 0,
                      "standard_material_per_pair": round(b["standard_material"] / good, 2) if good else 0, "variance_per_pair": round((total - b["standard_material"]) / good, 2) if good else 0, "plans": b["plans"]})
     return {"from": first.isoformat(), "to": last.isoformat(), "allocation_method": "GOOD_PAIRS", "unallocated_factory_overhead": round(factory_overhead if not total_good else 0, 2), "rows": sorted(rows, key=lambda x: (x["article"], x["colour"])),
-            "data_note": "Cutting, printing and packaging remain zero until their completion/rate transactions are configured. Historical material issue rates are preserved for new issues."}
+            "data_note": "Material uses its issue-time rate. Cutting and printing use the Factory rate active on their production date; stitching uses the fabricator rate active on the return date."}
 
 
 @api.post("/accounts/close-month")
