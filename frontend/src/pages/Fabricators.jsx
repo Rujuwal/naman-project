@@ -9,7 +9,17 @@ const date = (v) => v ? new Date(v).toLocaleDateString() : "—";
 
 export default function Fabricators() {
   const [items, setItems] = useState([]), [selectedId, setSelectedId] = useState(null), [search, setSearch] = useState(""), [status, setStatus] = useState("ALL"), [month, setMonth] = useState(""), [tab, setTab] = useState("current");
-  useEffect(() => { api.get("/fabricators/control").then((rows) => { setItems(rows); setSelectedId(rows[0]?.id || null); }); }, []);
+  useEffect(() => {
+    const legacyShape = (row) => ({
+      ...row, plans_out: row.current_work || 0, pairs_out: row.pending_pairs || 0,
+      returned_this_month: row.pairs_returned || 0, average_quality: null,
+      on_time_return_pct: 0, rework_rate: row.rework_pairs && row.pairs_returned ? Number((row.rework_pairs / row.pairs_returned * 100).toFixed(1)) : 0,
+      average_return_days: row.turnaround_days, overdue_plans: row.overdue_plans || 0,
+      status: row.overdue_plans ? "Overdue" : ((row.current_work || 0) ? "Active" : "Clear"), overall: "Available after QC history",
+      current_work: [], return_history: [], quality_history: [], defects: {}, completed_plans: row.returns || 0, completed_pairs: row.pairs_returned || 0,
+    });
+    api.get("/fabricators/control").catch(() => api.get("/fabricators/management").then((rows) => rows.map(legacyShape))).then((rows) => { setItems(rows); setSelectedId(rows[0]?.id || null); }).catch(() => setItems([]));
+  }, []);
   const shown = useMemo(() => items.filter((f) => (status === "ALL" || f.status === status) && f.name.toLowerCase().includes(search.toLowerCase())), [items, status, search]);
   const selected = items.find((f) => f.id === selectedId);
   const byMonth = (rows, field) => rows.filter((r) => !month || (r[field] || "").slice(0, 7) === month);
