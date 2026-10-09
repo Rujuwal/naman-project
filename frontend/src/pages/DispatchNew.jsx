@@ -13,6 +13,7 @@ export default function DispatchNew() {
   const nav = useNavigate();
   const [customers, setCustomers] = useState([]);
   const [customerId, setCustomerId] = useState("");
+  const [customerFilter, setCustomerFilter] = useState("");
   const [plans, setPlans] = useState([]);
   const [selectedPlans, setSelectedPlans] = useState([]);
   const [bags, setBags] = useState([]);
@@ -51,6 +52,7 @@ export default function DispatchNew() {
   }, []);
 
   const selectCustomer = (value) => setCustomerId(value);
+  const visiblePlans = plans.filter((plan) => (plan.source_customer_name || "").toLowerCase().includes(customerFilter.trim().toLowerCase()));
 
   const togglePlan = (p) => setSelectedPlans((prev) => prev.some((x) => x.id === p.id) ? prev.filter((x) => x.id !== p.id) : [...prev, p]);
 
@@ -96,10 +98,11 @@ export default function DispatchNew() {
       <PageHeader title="New Dispatch" subtitle="Select ready plans first, then choose any dispatch recipient and transport details" />
 
       <Card className="p-4 mb-4">
-        <div className="font-display font-semibold mb-2">Ready Plans (Finished Stock)</div>
+        <div className="flex flex-wrap items-end justify-between gap-3 mb-2"><div className="font-display font-semibold">Ready Plans (Finished Stock)</div><div className="w-full md:w-72"><Label>Filter by source customer name</Label><Input value={customerFilter} onChange={(event) => setCustomerFilter(event.target.value)} placeholder="e.g. Yashvi Enterprises" data-testid="dispatch-customer-filter" /></div></div>
         {plans.length === 0 && <div className="text-slate-500 text-sm">No ready plans available for dispatch.</div>}
+        {plans.length > 0 && visiblePlans.length === 0 && <div className="text-slate-500 text-sm">No ready plans match this customer filter.</div>}
         <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
-          {plans.map((p) => {
+          {visiblePlans.map((p) => {
             const sel = !!selectedPlans.find((x) => x.id === p.id);
             return (
               <div key={p.id} onClick={() => togglePlan(p)} data-testid={`avail-plan-${p.plan_no}`}
